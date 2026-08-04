@@ -1,0 +1,49 @@
+==============================================================================
+BATCH WINDOW vs EVENT-AT-A-TIME - staleness at first availability
+==============================================================================
+source          : fixtures\event_sample.jsonl
+generated_at    : 2026-08-04T14:39:12+00:00
+batch window    : 15 minutes  [Assumed - anchored to the brief's stated
+                  15-30 minute current dashboard latency]
+events measured : 20
+excluded        : 1 dead-lettered, 1 with no server timestamp, 3 with a client clock ahead of the server
+
+EXCLUDED - clock-anomalous events, reported not discarded:
+  evt-0005: apparent staleness -47.2s (ts=2026-06-15T14:05:00.120Z received_at=2026-06-15T14:04:12.930Z)
+  evt-0006: apparent staleness -3,900.0s (ts=2026-06-15T15:11:03.552Z received_at=2026-06-15T14:06:03.552Z)
+  evt-0016: apparent staleness -31,535,999.8s (ts=2027-06-15T14:11:27.310Z received_at=2026-06-15T14:11:27.522Z)
+
+  A client clock running ahead of the server makes an event look
+  as though it became visible BEFORE it happened. Averaging that in
+  silently corrupts the result - the same contamination that makes a
+  far-future timestamp dangerous to a watermark, showing up in a
+  second metric. Partitioned out and named, not quietly dropped.
+
+staleness = time an event first becomes visible, minus when it happened
+
+                         min      median        mean         max
+streaming             0.119s      0.164s      0.532s      7.560s
+batch (15min)           7.2s      481.9s      485.1s      831.9s
+
+measured per-event processing: mean 0.017ms, max 0.042ms [Observed]
+
+median streaming staleness   : 0.164s
+median batch staleness       : 481.9s
+ratio                        : 2938x
+
+------------------------------------------------------------------------------
+WHAT THIS SHOWS
+------------------------------------------------------------------------------
+Processing cost is measured and is a rounding error against the window.
+Latency in the current architecture is dominated by WHEN THE JOB RUNS,
+not by how long the work takes. Shortening the window is the lever;
+making the processing faster is not.
+
+The <5s target is unreachable with any batch window above ~5 seconds,
+regardless of how fast the processing gets. That is the argument for
+streaming, and it does not depend on any claim about a broker.
+
+WHAT THIS IS NOT: not a benchmark of Kafka, Kinesis, Flink or any
+broker. No network, no cluster, no queue, 25 events. Evidence Tier 3
+(benchmark run, method stated), not Tier 4.
+==============================================================================
