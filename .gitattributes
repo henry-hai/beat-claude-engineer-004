@@ -1,0 +1,11 @@
+# Normalize text to LF inside the repository.
+* text=auto eol=lf
+
+# Fixture data is byte-sensitive: the brief requires stating
+#   shasum -a 256 fixtures/event_sample.jsonl
+# and Git's autocrlf on Windows silently rewrites LF to CRLF on checkout,
+# which changes that hash (5749 bytes LF vs 5774 bytes CRLF for this file).
+# `-text` disables all line-ending translation so the checksum reproduces
+# byte-identically on Windows, macOS, and Linux.
+# NOTE: last matching pattern wins, so this must stay below the `*` rule.
+*.jsonl -text

@@ -1,0 +1,17 @@
+# Private working material - never publish.
+study-notes.md
+beat-claude-engineer-004_context.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Generated submission binaries (the .md is the source of truth)
+submission/*.pdf
