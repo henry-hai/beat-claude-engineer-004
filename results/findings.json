@@ -1,0 +1,184 @@
+{
+  "source": {
+    "path": "fixtures\\event_sample.jsonl",
+    "sha256": "1aeb24b415009e89fcf8acb5a178410faf216dc17b16920d9849ecc8bbb24235",
+    "bytes": 5749
+  },
+  "generated_at": "2026-08-04T14:23:56+00:00",
+  "counts": {
+    "lines_read": 25,
+    "events_parsed": 24,
+    "dead_lettered": 1,
+    "events_normalized": 1,
+    "findings": 21,
+    "anomaly_classes": 13,
+    "stateless_classes": 9,
+    "stateful_classes": 4,
+    "by_severity": {
+      "info": 4,
+      "warn": 10,
+      "critical": 7
+    }
+  },
+  "findings_by_class": {
+    "client_asserted_aggregate": [
+      {
+        "event_id": "evt-0019",
+        "anomaly_class": "client_asserted_aggregate",
+        "severity": "warn",
+        "detail": "client-computed aggregate present: count_today=3 - store with provenance, never use as the source of truth for segmentation; recompute server-side from raw events"
+      }
+    ],
+    "deletion_scope": [
+      {
+        "event_id": "evt-0017",
+        "anomaly_class": "deletion_scope",
+        "severity": "critical",
+        "detail": "deletion for user_id='u-1077' reaches beyond that key: anonymous_id(s) ['anon-77a'] and 2 event(s) observed in this sample (evt-0006, evt-0017). Deleting only rows keyed by user_id would leave the pre-identification history behind. Scope is bounded by what state remembers, so deletion must run against durable storage, not this window."
+      }
+    ],
+    "duplicate_event": [
+      {
+        "event_id": "evt-0002",
+        "anomaly_class": "duplicate_event",
+        "severity": "warn",
+        "detail": "event_id already seen for this tenant: first received_at=2026-06-15T14:02:20.014Z, this copy received_at=2026-06-15T14:02:27.442Z - at-least-once delivery, deduplicate on (tenant_id, event_id) before any counting"
+      }
+    ],
+    "future_timestamp": [
+      {
+        "event_id": "evt-0016",
+        "anomaly_class": "future_timestamp",
+        "severity": "critical",
+        "detail": "ts is 365.0 days beyond received_at: admitting this into an event-time window would advance the completeness mark past every real window"
+      }
+    ],
+    "identity_stitch": [
+      {
+        "event_id": "evt-0003",
+        "anomaly_class": "identity_stitch",
+        "severity": "info",
+        "detail": "anon-9f2 resolved to u-5511; 2 earlier anonymous event(s) (evt-0001, evt-0002) must be re-attributed retroactively and are now in scope for any deletion request against u-5511"
+      },
+      {
+        "event_id": "evt-0008",
+        "anomaly_class": "identity_stitch",
+        "severity": "info",
+        "detail": "anon-c81 resolved to u-2209; 2 earlier anonymous event(s) (evt-0004, evt-0005) must be re-attributed retroactively and are now in scope for any deletion request against u-2209"
+      },
+      {
+        "event_id": "evt-0017",
+        "anomaly_class": "identity_stitch",
+        "severity": "info",
+        "detail": "anon-77a resolved to u-1077; 1 earlier anonymous event(s) (evt-0006) must be re-attributed retroactively and are now in scope for any deletion request against u-1077"
+      },
+      {
+        "event_id": "evt-0022",
+        "anomaly_class": "identity_stitch",
+        "severity": "info",
+        "detail": "anon-3d0 resolved to u-7304; 1 earlier anonymous event(s) (evt-0007) must be re-attributed retroactively and are now in scope for any deletion request against u-7304"
+      }
+    ],
+    "missing_received_at": [
+      {
+        "event_id": "evt-0009",
+        "anomaly_class": "missing_received_at",
+        "severity": "warn",
+        "detail": "no received_at: ingest latency and clock skew cannot be measured for this event, and no value was synthesised"
+      }
+    ],
+    "null_tenant": [
+      {
+        "event_id": "evt-0011",
+        "anomaly_class": "null_tenant",
+        "severity": "critical",
+        "detail": "tenant_id is null: event is unroutable and must never be attributed to a tenant by inference"
+      }
+    ],
+    "pii_in_properties": [
+      {
+        "event_id": "evt-0007",
+        "anomaly_class": "pii_in_properties",
+        "severity": "critical",
+        "detail": "personal data in event properties: contact_email (key name), phone (key name)"
+      }
+    ],
+    "privacy_request": [
+      {
+        "event_id": "evt-0017",
+        "anomaly_class": "privacy_request",
+        "severity": "critical",
+        "detail": "regulatory request in the event stream: request='delete_all_data' regulation='GDPR' user_id='u-1077' anonymous_id='anon-77a' - must trigger the deletion workflow, and deletion must cover the anonymous history that predates identification"
+      }
+    ],
+    "received_before_sent": [
+      {
+        "event_id": "evt-0005",
+        "anomaly_class": "received_before_sent",
+        "severity": "warn",
+        "detail": "client clock is 47.190s ahead of the server: ts=2026-06-15T14:05:00.120Z received_at=2026-06-15T14:04:12.930Z"
+      },
+      {
+        "event_id": "evt-0006",
+        "anomaly_class": "received_before_sent",
+        "severity": "critical",
+        "detail": "client clock is 65.0min ahead of the server: ts=2026-06-15T15:11:03.552Z received_at=2026-06-15T14:06:03.552Z"
+      },
+      {
+        "event_id": "evt-0016",
+        "anomaly_class": "received_before_sent",
+        "severity": "critical",
+        "detail": "client clock is 365.0 days ahead of the server: ts=2027-06-15T14:11:27.310Z received_at=2026-06-15T14:11:27.522Z"
+      }
+    ],
+    "schema_drift": [
+      {
+        "event_id": "evt-0009",
+        "anomaly_class": "schema_drift",
+        "severity": "warn",
+        "detail": "event arrived in a legacy SDK shape and was normalised at the edge: renamed top-level field 'timestamp' -> 'ts'; renamed event type 'pageview' -> 'page_view'; renamed property 'page_path' -> 'path'; renamed property 'ref' -> 'referrer'; canonical field 'received_at' absent, left null"
+      }
+    ],
+    "suspicious_referrer": [
+      {
+        "event_id": "evt-0012",
+        "anomaly_class": "suspicious_referrer",
+        "severity": "warn",
+        "detail": "referrer suggests automated traffic ('scanner' in 'https://scanner.example-bot.net') - quarantine from customer-facing metrics, do not delete on this signal alone"
+      },
+      {
+        "event_id": "evt-0013",
+        "anomaly_class": "suspicious_referrer",
+        "severity": "warn",
+        "detail": "referrer suggests automated traffic ('scanner' in 'https://scanner.example-bot.net') - quarantine from customer-facing metrics, do not delete on this signal alone"
+      },
+      {
+        "event_id": "evt-0014",
+        "anomaly_class": "suspicious_referrer",
+        "severity": "warn",
+        "detail": "referrer suggests automated traffic ('scanner' in 'https://scanner.example-bot.net') - quarantine from customer-facing metrics, do not delete on this signal alone"
+      },
+      {
+        "event_id": "evt-0015",
+        "anomaly_class": "suspicious_referrer",
+        "severity": "warn",
+        "detail": "referrer suggests automated traffic ('scanner' in 'https://scanner.example-bot.net') - quarantine from customer-facing metrics, do not delete on this signal alone"
+      }
+    ],
+    "visitor_burst": [
+      {
+        "event_id": "evt-0015",
+        "anomaly_class": "visitor_burst",
+        "severity": "warn",
+        "detail": "visitor anon-8fc produced 4 events in 50ms (evt-0012, evt-0013, evt-0014, evt-0015) - a rate no human produces; quarantine from customer-facing metrics, do not delete on a heuristic"
+      }
+    ]
+  },
+  "dead_letters": [
+    {
+      "line_no": 21,
+      "reason": "invalid JSON: Expecting ',' delimiter at position 227",
+      "raw": "{\"event_id\":\"evt-0020\",\"tenant_id\":\"t-088\",\"anonymous_id\":\"anon-e42\",\"user_id\":null,\"type\":\"click\",\"ts\":\"2026-06-15T14:15:33.472Z\",\"received_at\":\"2026-06-15T14:15:33.655Z\",\"properties\":{\"selector\":\"#signup\",\"path\":\"/features\"}"
+    }
+  ]
+}
