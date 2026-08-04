@@ -1,0 +1,1 @@
+{"line_no": 21, "reason": "invalid JSON: Expecting ',' delimiter at position 227", "raw": "{\"event_id\":\"evt-0020\",\"tenant_id\":\"t-088\",\"anonymous_id\":\"anon-e42\",\"user_id\":null,\"type\":\"click\",\"ts\":\"2026-06-15T14:15:33.472Z\",\"received_at\":\"2026-06-15T14:15:33.655Z\",\"properties\":{\"selector\":\"#signup\",\"path\":\"/features\"}"}
