@@ -1,0 +1,146 @@
+==============================================================================
+AWS COST MODEL - real-time analytics pipeline
+==============================================================================
+region         : us-east-1 (US East, N. Virginia)
+prices retrieved: 2026-08-04 from the AWS pricing pages cited below
+generated_at   : 2026-08-05T14:17:30+00:00
+
+------------------------------------------------------------------------------
+SIZING
+------------------------------------------------------------------------------
+  events/day                          50,000,000   [Observed] brief
+  mean event size                            229 B [Observed] measured on the fixture
+  spike multiplier                            10 x [Observed] brief
+
+  average events/sec                         579
+  peak events/sec (10x)                    5,787
+  peak throughput                           1.33 MB/s
+  raw volume                                11.4 GB/day
+
+  shards needed by records/s                 5.8
+  shards needed by MB/s                      1.3
+  BINDING CONSTRAINT                   records/s
+  shards provisioned (+30% head)               8
+
+  Note: record COUNT binds, not bandwidth. At 229 bytes an event, a shard
+  saturates its 1,000 records/s limit while using ~23% of its 1 MB/s. Sizing
+  this on bandwidth would under-provision by roughly 4x.
+
+------------------------------------------------------------------------------
+MONTHLY COST
+------------------------------------------------------------------------------
+  Kinesis Data Streams - shards                    87.60
+  Kinesis Data Streams - PUT units                 21.00
+  Managed Flink - compute                         321.20
+  Managed Flink - state storage                    20.00
+  S3 event lake - storage (end of yr 1)            21.85
+  S3 event lake - requests                          0.22
+  DynamoDB - profile writes                       937.50
+  DynamoDB - personalisation reads                 18.75
+  DynamoDB - storage                              125.00
+  ElastiCache Redis - nodes                       255.79
+                                            ------------
+  TOTAL                                         1,808.90
+
+  budget ceiling                               50,000.00   [Observed] brief
+  headroom remaining                           48,191.10
+  ceiling consumed                                  3.6%
+
+------------------------------------------------------------------------------
+WHAT THIS ACTUALLY TELLS YOU
+------------------------------------------------------------------------------
+  The modelled spend is 3.6% of the stated ceiling. Even if every
+  [Assumed] input here is wrong by 5x, the total stays under budget.
+
+  So the $50K/month ceiling is NOT the binding constraint on this design.
+  Two dedicated engineers and a three-month MVP window are.
+
+  That inverts a normal build-vs-buy decision. Self-managed Kafka on EC2 is
+  cheaper per byte than Kinesis, but it spends the resource that is actually
+  scarce: engineer-hours. With 96% of the budget unused, paying AWS list
+  price to avoid operating a broker is straightforwardly correct here.
+
+------------------------------------------------------------------------------
+WRITE AMPLIFICATION - the number worth arguing about
+------------------------------------------------------------------------------
+  DynamoDB is 60% of the total, and profile writes alone are
+  $938/month, because the model assumes one write per event.
+
+  That assumption is a design choice, not a fact. If the stream job keeps
+  per-visitor state and flushes on session end rather than per event, the
+  write count drops by roughly the average events-per-session. The cost
+  model is what surfaces that: it is not visible from the architecture
+  diagram, only from the arithmetic.
+
+------------------------------------------------------------------------------
+SENSITIVITY
+------------------------------------------------------------------------------
+  every assumption wrong by  2x  ->  $     3,618/month   under ceiling
+  every assumption wrong by  5x  ->  $     9,045/month   under ceiling
+  every assumption wrong by 10x  ->  $    18,089/month   under ceiling
+
+  The conclusion survives to roughly 28x. That is what makes it safe to say
+  the budget is not the constraint, rather than merely hoping so.
+
+------------------------------------------------------------------------------
+DELIBERATELY NOT PRICED
+------------------------------------------------------------------------------
+  A managed OLAP serving tier (OpenSearch Service or equivalent) and Aurora
+  PostgreSQL are both part of the design but are NOT in the total above.
+  AWS's published pricing pages did not render their rate tables when
+  checked on 2026-08-04, and inventing a plausible figure would be worse
+  than leaving a visible hole. These are a look-it-up before committing
+  budget, not an estimate.
+
+  Given the headroom above, neither is likely to change the conclusion -
+  but that is a prediction, not a calculation, and it is labelled as such.
+
+------------------------------------------------------------------------------
+SERVING-TIER TRIPWIRE - when Postgres stops being the right answer
+------------------------------------------------------------------------------
+  The MVP serves dashboards from pre-aggregated rollups in PostgreSQL,
+  which this team already runs. That is a reversible decision. Here is the
+  condition that reverses it, computed rather than asserted.
+
+  1-minute buckets retained hot                  2,880   (48h)
+  cartesian rows/bucket/tenant                    200   (paths x event types)
+  events/bucket/tenant                             69   (traffic bound)
+  rows/bucket/tenant = min of those                69
+  BINDING CONSTRAINT                     event volume
+
+  rollup rows per tenant                      200,000
+  hot rollup rows, 500 tenants            100,000,000
+  Postgres comfort ceiling                250,000,000   [Assumed]
+  utilisation                                   40.0%
+  headroom                                       2.5x
+
+  Rollups are SPARSE. A tenant averaging 69 events a minute cannot fill
+  200 (path x type) buckets, so row count is bounded by TRAFFIC, not by
+  how many pages the customer tracks. Modelling the cross-product instead
+  overstates this by ~3x and would have picked the wrong architecture.
+
+  THE TRIPWIRE, three conditions. Any one fires a migration review:
+
+    1. CAPACITY   hot rollup rows exceed 250,000,000, which at
+                  current shape means ~2.5x growth in events per tenant.
+                  Path cardinality only starts to matter above ~17 paths
+                  per tenant (modelled at 50); below that, traffic binds
+    2. LATENCY    dashboard query p95 exceeds 1.0s over a 7-day window
+    3. FRESHNESS  rollup write lag exceeds 30s at p95
+
+  Condition 1 is a leading indicator - it fires before customers feel
+  anything. Conditions 2 and 3 are trailing: by then they already have.
+  Alerting on 1 is the point of computing it.
+
+  WHY DEFER RATHER THAN COMMIT: growth in events per tenant is what
+  decides this, and the brief gives a fleet-wide total rather than a
+  per-tenant distribution. 500 tenants averaging 100k events/day is a
+  very different system from 20 tenants at 2M and 480 at 8k, and the
+  brief does not say which it is. Committing to a columnar store on day
+  one is not more rigorous than deferring - it is guessing with more
+  confidence. The MVP ships on infrastructure the team already operates,
+  and the threshold that would prove that wrong is instrumented in week
+  one. Per-tenant distribution is the first thing I would measure.
+
+  This is an option held, not a migration scheduled. It may never fire.
+==============================================================================
