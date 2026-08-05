@@ -113,6 +113,27 @@ watermark, surfacing in a second metric.
 
 ---
 
+## Tests
+
+```bash
+python -m unittest discover -s tests -t .
+```
+
+50 tests, standard library only. Three layers, because "how do you validate
+data accuracy?" is a question the brief actually asks:
+
+1. **Unit tests** over the pure functions, one per anomaly class. They are
+   cheap to write *only* because `normalize.py` and `rules.py` are pure
+   functions of a single event. Architecture that is easy to test is not a
+   coincidence.
+2. **Property tests** on purity itself: classifiers must not mutate their
+   input and must be order-independent. If that ever stops holding, the claim
+   that this code lifts into a stream processor unchanged is dead, and the
+   suite says so.
+3. **Fixture regression** pinning the exact counts above, plus the fixture's
+   own SHA-256. Any rule change that moves a number fails loudly and names
+   what moved. This is the layer that would catch a bad deploy.
+
 ## What this deliberately is not
 
 - **Not a broker benchmark.** No network, no cluster, no queue, 25 events. Any
