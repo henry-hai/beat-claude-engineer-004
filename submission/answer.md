@@ -61,8 +61,7 @@ flowchart LR
   FL ==> S3[("S3 lake<br/>Parquet")] ==> ATH["Athena to<br/>warehouse export"]
 ```
 
-**Figure 1.** SDK to dashboard. The dead-letter branch is drawn deliberately: a
-malformed record must never stop the consumer.
+**Figure 1.** SDK to dashboard. The dead-letter branch is drawn deliberately.
 
 ### Why each component, and what was rejected
 
@@ -89,16 +88,22 @@ on one side, 4 on the other [Observed].
 One canonical envelope (`event_id`, `tenant_id`, `anonymous_id`, `user_id`,
 `type`, `ts`, `received_at`, `properties`), with legacy names mapped at the edge
 from a lookup table rather than in code, so registering the next SDK generation
-is a config change. Every transformation is recorded, so the pipeline can always
-answer *what did you change about this event?* `ts` is the browser's clock,
-`received_at` is ours; both are kept and neither "corrects" the other.
+is a config change. Every transformation is recorded, so the pipeline can answer
+*what did you change about this event?* `ts` is the browser's clock and
+`received_at` is ours; neither "corrects" the other.
 
 **Identity resolves backwards.** A visitor browses anonymously, signs in, and
 their earlier events become theirs retroactively. Four such stitches appear in
 25 lines [Observed], including `anon-3d0` to `u-7304`, which retroactively attaches
-`evt-0007`'s personal data to a named person. Deletion therefore runs against
-the identity graph in durable storage, never the bounded in-memory window, which
-returns a lower bound rather than the truth. See `pipeline/state.py`.
+`evt-0007`'s personal data to a named person. Deletion runs against that graph
+in durable storage, not the bounded in-memory window; in the Parquet lake,
+where rewriting files per request is impractical, PII sits under a per-subject
+key and deletion destroys the key. **One mechanism covers all three regimes:**
+CCPA's right to know is deletion scope without the delete, and SOC 2's demand
+for evidence that controls operated is met by the recorded transformation
+trail, per-tenant partition keys, and a dead-letter sink that discards nothing
+without a record. Audit falls out of the design rather than being bolted on.
+See `pipeline/state.py`.
 
 ## 2. Scale, reliability and migration
 
@@ -120,9 +125,11 @@ result exists only because the event size was measured, not guessed.
 ### Zero loss, and what degrades first
 
 Delivery is at-least-once, so dedupe keys on `(tenant_id, event_id)`, not
-`event_id` alone, because SDKs do not coordinate IDs across customers and collapsing
-them deletes one tenant's event on another's collision. `evt-0002` appears
-twice, 7.4 seconds apart: a retry [Observed].
+`event_id` alone, because SDKs do not coordinate IDs across customers and
+collapsing them deletes one tenant's event on another's collision. `evt-0002`
+appears twice, 7.4 seconds apart: a retry [Observed]. The 100k-id dedupe window
+[Assumed] gives 17s of coverage at peak, catching that with 2.3x margin; in
+production it should be time-bounded against the SDK's maximum backoff.
 
 Unparseable records go to a dead-letter sink with bytes intact, never the floor.
 `evt-0020` is one missing brace; the obvious consumer dies there and never reads
@@ -130,17 +137,19 @@ the four events after it [Observed]. Scale that to a crash-looping consumer
 while the broker keeps accepting writes and you have the loss mechanism the
 brief describes. Under overload the system sheds in a stated order and **ingest
 never sheds**: rollup granularity coarsens, then personalization falls back to
-cached segments, then lake writes batch larger. The broker is the buffer;
-buffered data is late, not lost. See `pipeline/normalize.py`.
+cached segments, then lake writes batch larger. The broker is the buffer, so
+buffered data is late rather than lost, but only until retention expires. At 24
+hours [Assumed] that is the real deadline to drain a backlog, which makes
+retention depth an alert rather than a setting. See `pipeline/normalize.py`.
 
 ### Migration: per-tenant, with an automatic trigger
 
 The SDK cannot change and 500+ customers cannot break [Observed], so no part of
 the cutover is visible to them. API Gateway forks to both pipelines with the old
-one authoritative; both process everything in parallel; shadow dashboards go
-internal-only; then per-tenant cutover, smallest first. **"Accuracy verified"**
-means, per tenant-hour: counts agree within 0.1% [Assumed] and an `event_id`
-join leaves no unmatched rows on either side.
+one authoritative, both run in parallel, dashboards stay internal, then
+per-tenant cutover smallest first. **"Accuracy verified"** means, per
+tenant-hour: counts agree within 0.1% [Assumed] and an `event_id` join leaves
+no unmatched rows.
 
 **The rollback trigger is automatic and needs no human.** Any tenant-hour
 diverging more than 0.5% for two consecutive hours [Assumed], or dashboard p95
@@ -149,10 +158,9 @@ so a bad cutover costs one customer an hour rather than all of them. The
 comparison runs the same code as `pipeline/rules.py` against both streams.
 
 Two accuracy signals run continuously afterwards [Assumed]: the gap between
-`evt-0019`'s client-side counter and the server's own record, which is a free
-measurement of pipeline loss; and new instrumentation, a monotonic per-session
-sequence number, because gaps in a server-assigned `event_id` cannot detect
-loss at all. See section 5.
+`evt-0019`'s client counter and the server's own record, a free measurement of
+loss; and a new monotonic per-session sequence number, because gaps in a
+server-assigned `event_id` cannot detect loss at all. See section 5.
 
 ## 3. Trade-offs and risks
 
@@ -163,6 +171,9 @@ flexibility. Modeled infrastructure is $1,809/month, 3.6% of the ceiling
 being wrong by 28x. **The $50K ceiling is not the binding constraint. Two
 engineers and three months are.** That inverts the usual build-versus-buy call:
 self-managed Kafka is cheaper per byte and spends the scarcer resource.
+DynamoDB is 60% of the total and profile writes alone are 52% [Estimated],
+nearly all of it write amplification that disappears if the stream job holds
+per-visitor state and flushes on session end instead of per event.
 
 **The MVP excludes** a columnar serving tier, ML segmentation, per-tenant
 retention, real-time backfill, and cross-tenant benchmarking.
@@ -172,14 +183,15 @@ Dashboards come from pre-aggregated rollups in PostgreSQL, which this team
 already runs. At the modeled shape that table holds 100M hot rows against an
 assumed 250M ceiling: 40% utilization, 2.5x headroom [Estimated]. Three
 conditions trigger a migration review: rows past the ceiling (leading),
-dashboard p95 over 1s across 7 days, or rollup lag over 30s. An option held,
-not a migration scheduled. It may never fire.
+dashboard query p95 over 1s across 7 days, or rollup lag over 30s [Assumed].
+The 1s threshold is tighter than section 2's 5s rollback on purpose: 5s is the
+product promise, so firing there means customers already felt it. An option
+held, not a migration scheduled. It may never fire.
 
 **With more time I would measure the per-tenant distribution first.** 50M/day
-is a fleet-wide total [Observed]; 500 tenants at 100k is a different system
-from 20 at 2M and 480 at 8k [Assumed], and which it is changes the serving
-tier. Figures derive from `pipeline/cost.py`; the tripwire is in
-`results/cost_model.json`.
+is a fleet-wide total [Observed]; 500 tenants at 100k differs from 20 at 2M and
+480 at 8k [Assumed], and which it is changes the serving tier. See
+`pipeline/cost.py`.
 
 ## 4. What is actually in the sample data
 
@@ -195,7 +207,7 @@ event, 4 requiring memory of others [Observed]. Full output with every
 | Null tenant | `evt-0011` | Quarantined; never attributed by inference |
 | Clock skew, 3 magnitudes | `evt-0005`, `-0006`, `-0016` | Ladder: 47s, 65min, 365d. Excluded from windowed math, not corrected |
 | Far-future timestamp | `evt-0016` | Quarantined pre-windowing; would advance the watermark past every real window |
-| Bot traffic | `evt-0012`-`-0015` | Two signals: referrer, and 4 events in 51ms. Quarantined, never deleted |
+| Bot traffic | `evt-0012`-`-0015` | Two signals: referrer, and 4 events in 50ms. Quarantined, never deleted |
 | PII in properties | `evt-0007` | Caught by key name and value shape; tagged for deletion tooling |
 | Privacy request in-stream | `evt-0017` | Routed to the deletion workflow, not counted as behavior |
 | Deletion scope | `evt-0017` | Resolved via identity graph; reaches `evt-0006`, written anonymously |
@@ -204,8 +216,8 @@ event, 4 requiring memory of others [Observed]. Full output with every
 | *all rows* | *25 lines* | *[Observed], regenerate via `pipeline/run.py`* |
 
 **The 9/4 split is itself an architectural finding.** Those four cannot be
-answered by a stateless consumer at any price. They are the argument for keyed
-state, and why the detector separates them rather than hiding the boundary.
+answered by a stateless consumer at any price, which is the argument for keyed
+state.
 
 ## 5. Three things I would not act on at face value
 
@@ -220,18 +232,20 @@ that the brief asks for the feature the bad data would break. Segments are
 recomputed server-side. The claim is still stored, in a separate namespace,
 because the divergence is a free loss measurement.
 
-**2. The bot cluster.** `evt-0012`-`evt-0015`: four page views in 51ms from one
+**2. The bot cluster.** `evt-0012`-`evt-0015`: four page views in 50ms from one
 visitor, all referred by a host containing "scanner" [Observed]. I flag and
-quarantine; I do not delete. A referrer is attacker-controlled and legitimate
-hosts contain that substring. Wrong and deleted, real customer data is gone
-with no recovery; wrong and labeled, the cost is one column in a table.
+quarantine; I do not delete. A referrer is attacker-controlled. Wrong and
+deleted, customer data is gone with no recovery; wrong and labeled, the cost is
+one column in a table.
 
 **3. The brief's own loss figure.** It states ~3% loss at peak. This fixture
 can neither confirm nor refute that, and I will not pretend otherwise.
-`event_id` runs `evt-0001` to `evt-0024` with no gaps [Observed], but a
-curated sample shows no gaps whether or not the system leaks, and we do not
-know whether `event_id` is assigned client-side or on receipt. If the server
-assigns it, loss is invisible by construction. **What would settle it:** a
+The 25 lines carry `evt-0001` through `evt-0024` with no missing IDs
+[Observed], and the one absent from parsed output, `evt-0020`, is
+dead-lettered rather than lost. But a curated sample shows no gaps whether or
+not the system leaks, and we do not know whether `event_id` is assigned
+client-side or on receipt. If the server assigns it, loss is invisible by
+construction. **What would settle it:** a
 monotonic per-session sequence number, emitted by the SDK and reconciled
 server-side. That is why it is in week-one scope rather than a "we would
 monitor this" sentence.
@@ -242,15 +256,10 @@ monitor this" sentence.
 
 A runnable ingest-validation pipeline in pure Python 3, standard library only.
 No dependencies, no Docker, no network. It is the prototype of the component
-argued above to be the riskiest, and it doubles as the ingest stage of the
-design rather than being a separate demo.
-
-Four modules, split along how stream processors actually execute work:
-`normalize.py` (stateless map), `rules.py` (stateless classify), `state.py`
-(keyed aggregate over a window), `run.py` (job graph and sinks). Everything in
-the first two is a pure function of one event and lifts into production
-unchanged; everything that could not satisfy that contract was pushed into
-`state.py` rather than smuggled in.
+argued above to be the riskiest, and it is the design's ingest stage rather
+than a separate demo: `normalize.py` (stateless map), `rules.py` (stateless
+classify), `state.py` (keyed aggregate over a window), `run.py` (job graph and
+sinks).
 
 Every number in this document regenerates from these three commands:
 
@@ -273,12 +282,16 @@ git clone https://github.com/henry-hai/beat-claude-engineer-004
 cd beat-claude-engineer-004 && python -m pipeline.run fixtures/event_sample.jsonl
 ```
 
-The fixture is vendored so the repo runs standalone, and `.gitattributes` pins
-`*.jsonl` with `-text` so Git never rewrites its line endings. Without it,
+**Setup:** none. Standard library only, no install, no credentials, no network.
+Run on Python 3.14; the three commands take 384ms and the 50 tests 179ms
+[Observed], so every number here is verifiable in under a second.
+
+**Sample data** is vendored so the repo runs standalone, and `.gitattributes`
+pins `*.jsonl` with `-text` so Git never rewrites its line endings. Without it,
 cloning on Windows converts 25 line endings to CRLF and moves the file from
-5,749 to 5,774 bytes: identical text to a human, a completely different
-SHA-256 [Observed]. GitHub serves 5,749 bytes, so `shasum -a 256` reproduces
-the hash at the top of this document on any platform.
+5,749 to 5,774 bytes: identical text to a human, a completely different SHA-256
+[Observed]. GitHub serves 5,749 bytes, so `shasum -a 256` reproduces the hash
+at the top of this document on any platform.
 
 # Evidence log
 
@@ -294,30 +307,30 @@ Tiers per SCORING.md. Every figure is [Observed] unless the row says otherwise.
 | Record count binds Kinesis sizing, not bandwidth | 3 | `results/cost_model.json` |
 | Modeled spend $1,809/mo, 3.6% of ceiling, AWS prices dated | 3 | `results/cost_model.json` |
 | Serving tripwire: 100M hot rows vs 250M ceiling | 3 | `results/cost_model.json` |
-| Build history and decision record | 3 | `git log`, 16 commits with reasoning |
+| Build history and decision record | 3 | `git log`, every commit body states its reasoning |
 | Architecture and rejected alternatives; 50-test suite | 2 | this document; `tests/` |
+| Migration plan, rollback trigger, tripwire thresholds | 0 | untested proposals; nothing here has been run against a real cutover |
 | **Measured before/after from a comparable production system** | **none** | **I do not have this** |
-| *every figure above* | *3* | *[Observed] via `results/*.json`* |
+| *All figures [Observed] unless noted* | *3* | *`results/*.json`* |
 
 **On the missing Tier 4.** The rubric calls it the differentiator: measured
 before/after from a comparable system actually built or fixed. I have no
 production pipeline at this scale to cite, so I am not claiming it. The closest
-honest substitute is the latency harness in `pipeline/latency.py`, logged Tier 3
-deliberately, because it is a benchmark run on a simulation I wrote, moving 25
-events rather than 50 million [Observed]. Calling it Tier 4 would be inflation on a rubric
-built to catch exactly that.
+honest substitute is the latency harness, logged Tier 3 deliberately because it
+benchmarks a simulation I wrote moving 25 events rather than 50 million
+[Observed]. Calling it Tier 4 would be inflation on a rubric built to catch
+exactly that.
 
 # Number source labels
 
-Every number carries one of four labels, in the same paragraph.
-**[Observed]**: measured from the fixture or from running the artifact,
-reproducible with the commands above. **[Benchmarked]**: a published AWS list
-price, with page and retrieval date recorded in `pipeline/cost.py`.
-**[Estimated]**: derived by stated arithmetic from labeled inputs, with the
-derivation in the code rather than just the conclusion. **[Assumed]**: a
-placeholder chosen to make the plan concrete. Every threshold in the detector
-and every sizing assumption in the cost model is [Assumed] and lives as a named
-constant, easy to find and argue with rather than buried in a function.
+Every number carries one of four labels in the same paragraph.
+**[Observed]**: measured from the fixture or from running the artifact.
+**[Benchmarked]**: a published AWS list price, with page and retrieval date in
+`pipeline/cost.py`. **[Estimated]**: derived by stated arithmetic from labeled
+inputs, with the derivation in the code rather than only the conclusion.
+**[Assumed]**: a placeholder chosen to make the plan concrete. Every threshold
+and sizing assumption is [Assumed] and lives as a named constant, easy to find
+and argue with rather than buried in a function.
 
 # AI usage disclosure
 
@@ -341,7 +354,10 @@ called out that I had claimed Tier 4 for the latency measurement when the
 rubric does not support it, hence Tier 3. Two model-generated numbers were
 wrong and caught by re-running the arithmetic; the rollup sizing used a
 cross-product where the real bound is traffic, which would have selected the
-wrong serving tier.
+wrong serving tier. I also caught the renderer silently rewriting my
+punctuation into em dashes, which is not how I write, and a contradiction
+where the thesis claimed any broker would do while the component table gave a
+deciding reason for picking one.
 
 **Known weak spots.** The prose is fluent, and fluency is not evidence. Judge
 the repo, not the writing. Every threshold is [Assumed] rather than tuned
@@ -353,36 +369,51 @@ events/day.
 
 # What breaks it
 
+Each item states the failure, then how it would be detected in production
+rather than discovered by a customer.
+
 **The sample is 25 events** [Observed]. It cannot establish any rate: not
 error, not loss, not a distribution. Every conclusion from it is about
-mechanism, not magnitude.
+mechanism, not magnitude. *Detection:* a stated limit on the evidence, not a
+runtime failure, which is why no rate here is sourced from the fixture.
 
 **Every threshold is assumed**: clock-skew tolerances, the dedupe window, the
 burst threshold, the Postgres row ceiling. If real skew across the SDK fleet is
 distributed differently than guessed, the ladder mislabels events.
+*Detection:* alert on flag rate per class per tenant. A wrong threshold shows
+up as a rate that moves without a deploy, and a weekly audit of sampled flags
+keeps it honest.
 
 **The bot heuristic has false positives** by construction: a referrer is
 attacker-controlled and a legitimate company could be called anything. Which is
-why the pipeline labels rather than deletes.
+why the pipeline labels rather than deletes. *Detection:* quarantined traffic
+stays queryable, so a tenant disputing their numbers is answered from the
+quarantine rather than an apology.
 
 **Deletion scope from the artifact is a lower bound.** Keyed state is bounded,
-so the in-memory graph knows only what it has recently seen. Real deletion runs
-against durable storage.
+so the in-memory graph knows only what it recently saw. *Detection:* after
+every deletion, re-query the durable graph for that subject and assert zero
+rows. A deletion reporting success while rows remain is the failure that
+matters, and it is cheap to check.
 
 **Two cost lines are unpriced**, a managed OLAP tier and Aurora, because AWS
 did not render their rate tables when checked. With 96% of the ceiling unused
 [Estimated] they are unlikely to change the conclusion, but that is a
-prediction, not a calculation.
+prediction, not a calculation. *Detection:* reconcile the real bill against
+`pipeline/cost.py` line by line. The model is a script, so that is a diff
+rather than an argument.
 
 **The per-tenant distribution is unknown**, and it decides the serving tier. If
-the fleet is 20 large tenants rather than 500 even ones [Assumed],
-the Postgres rollup table is wrong from day one and the tripwire fires
-immediately rather than never.
+the fleet is 20 large tenants rather than 500 even ones [Assumed], the Postgres
+rollup table is wrong from day one and the tripwire fires at launch instead of
+possibly never. *Detection:* the tripwire is the detector, instrumented in week
+one so this surfaces before customers feel it.
 
-**The latency harness is a simulation.** It has no network, no cluster, no
-queue. It isolates and measures one mechanism: batch-window size
-dominates end-to-end latency. It proves nothing about any broker. Method and
-exclusions are stated in `pipeline/latency.py`.
+**The latency harness is a simulation.** No network, no cluster, no queue. It
+isolates one mechanism, that batch-window size dominates end-to-end latency,
+and proves nothing about any broker. Method in `pipeline/latency.py`.
+*Detection:* production p95 measured against the same staleness definition the
+harness uses, so simulated and real numbers stay directly comparable.
 
 # What stays human
 
@@ -410,5 +441,5 @@ pipeline quarantines and a human resolves it against the source integration.
 Deciding it is good enough to move a paying customer is not a threshold check;
 it is accountability, and it needs a name attached.
 
-**Tuning any threshold here.** Every one is [Assumed]. Changing them changes
-what the pipeline considers real, and that is never an autoscaling decision.
+**Tuning any threshold here.** Changing them changes what the pipeline
+considers real, which is never an autoscaling decision.
