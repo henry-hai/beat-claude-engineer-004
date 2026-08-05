@@ -1,0 +1,97 @@
+==============================================================================
+AWS COST MODEL - real-time analytics pipeline
+==============================================================================
+region         : us-east-1 (US East, N. Virginia)
+prices retrieved: 2026-08-04 from the AWS pricing pages cited below
+generated_at   : 2026-08-05T01:05:49+00:00
+
+------------------------------------------------------------------------------
+SIZING
+------------------------------------------------------------------------------
+  events/day                          50,000,000   [Observed] brief
+  mean event size                            229 B [Observed] measured on the fixture
+  spike multiplier                            10 x [Observed] brief
+
+  average events/sec                         579
+  peak events/sec (10x)                    5,787
+  peak throughput                           1.33 MB/s
+  raw volume                                11.4 GB/day
+
+  shards needed by records/s                 5.8
+  shards needed by MB/s                      1.3
+  BINDING CONSTRAINT                   records/s
+  shards provisioned (+30% head)               8
+
+  Note: record COUNT binds, not bandwidth. At 229 bytes an event, a shard
+  saturates its 1,000 records/s limit while using ~23% of its 1 MB/s. Sizing
+  this on bandwidth would under-provision by roughly 4x.
+
+------------------------------------------------------------------------------
+MONTHLY COST
+------------------------------------------------------------------------------
+  Kinesis Data Streams - shards                    87.60
+  Kinesis Data Streams - PUT units                 21.00
+  Managed Flink - compute                         321.20
+  Managed Flink - state storage                    20.00
+  S3 event lake - storage (end of yr 1)            21.85
+  S3 event lake - requests                          0.22
+  DynamoDB - profile writes                       937.50
+  DynamoDB - personalisation reads                 18.75
+  DynamoDB - storage                              125.00
+  ElastiCache Redis - nodes                       255.79
+                                            ------------
+  TOTAL                                         1,808.90
+
+  budget ceiling                               50,000.00   [Observed] brief
+  headroom remaining                           48,191.10
+  ceiling consumed                                  3.6%
+
+------------------------------------------------------------------------------
+WHAT THIS ACTUALLY TELLS YOU
+------------------------------------------------------------------------------
+  The modelled spend is 3.6% of the stated ceiling. Even if every
+  [Assumed] input here is wrong by 5x, the total stays under budget.
+
+  So the $50K/month ceiling is NOT the binding constraint on this design.
+  Two dedicated engineers and a three-month MVP window are.
+
+  That inverts a normal build-vs-buy decision. Self-managed Kafka on EC2 is
+  cheaper per byte than Kinesis, but it spends the resource that is actually
+  scarce: engineer-hours. With 96% of the budget unused, paying AWS list
+  price to avoid operating a broker is straightforwardly correct here.
+
+------------------------------------------------------------------------------
+WRITE AMPLIFICATION - the number worth arguing about
+------------------------------------------------------------------------------
+  DynamoDB is 60% of the total, and profile writes alone are
+  $938/month, because the model assumes one write per event.
+
+  That assumption is a design choice, not a fact. If the stream job keeps
+  per-visitor state and flushes on session end rather than per event, the
+  write count drops by roughly the average events-per-session. The cost
+  model is what surfaces that: it is not visible from the architecture
+  diagram, only from the arithmetic.
+
+------------------------------------------------------------------------------
+SENSITIVITY
+------------------------------------------------------------------------------
+  every assumption wrong by  2x  ->  $     3,618/month   under ceiling
+  every assumption wrong by  5x  ->  $     9,045/month   under ceiling
+  every assumption wrong by 10x  ->  $    18,089/month   under ceiling
+
+  The conclusion survives to roughly 28x. That is what makes it safe to say
+  the budget is not the constraint, rather than merely hoping so.
+
+------------------------------------------------------------------------------
+DELIBERATELY NOT PRICED
+------------------------------------------------------------------------------
+  A managed OLAP serving tier (OpenSearch Service or equivalent) and Aurora
+  PostgreSQL are both part of the design but are NOT in the total above.
+  AWS's published pricing pages did not render their rate tables when
+  checked on 2026-08-04, and inventing a plausible figure would be worse
+  than leaving a visible hole. These are a look-it-up before committing
+  budget, not an estimate.
+
+  Given the headroom above, neither is likely to change the conclusion -
+  but that is a prediction, not a calculation, and it is labelled as such.
+==============================================================================
