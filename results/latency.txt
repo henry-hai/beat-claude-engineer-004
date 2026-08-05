@@ -2,7 +2,7 @@
 BATCH WINDOW vs EVENT-AT-A-TIME - staleness at first availability
 ==============================================================================
 source          : fixtures\event_sample.jsonl
-generated_at    : 2026-08-04T14:39:12+00:00
+generated_at    : 2026-08-05T18:32:29+00:00
 batch window    : 15 minutes  [Assumed - anchored to the brief's stated
                   15-30 minute current dashboard latency]
 events measured : 20
@@ -25,7 +25,7 @@ staleness = time an event first becomes visible, minus when it happened
 streaming             0.119s      0.164s      0.532s      7.560s
 batch (15min)           7.2s      481.9s      485.1s      831.9s
 
-measured per-event processing: mean 0.017ms, max 0.042ms [Observed]
+measured per-event processing: mean 0.020ms, max 0.045ms [Observed]
 
 median streaming staleness   : 0.164s
 median batch staleness       : 481.9s

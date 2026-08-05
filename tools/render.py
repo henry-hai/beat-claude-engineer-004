@@ -45,7 +45,7 @@ html{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 body{
   margin: 0 auto; max-width: 7.2in; padding: 0;
   font-family: -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
-  font-size: 10.2pt; line-height: 1.42; color: var(--ink); background:#fff;
+  font-size: 10.2pt; line-height: 1.38; color: var(--ink); background:#fff;
   font-kerning: normal; text-rendering: optimizeLegibility;
 }
 h1{
@@ -56,13 +56,13 @@ h1{
 }
 h2{
   font-family: Georgia, "Iowan Old Style", serif;
-  font-size: 12.6pt; font-weight: 600; margin: 1.15rem 0 0.2rem;
+  font-size: 12.6pt; font-weight: 600; margin: 0.95rem 0 0.18rem;
   padding-bottom: 0.2rem; border-bottom: 1px solid var(--rule);
   break-after: avoid; page-break-after: avoid;
 }
 h3{
   font-family: Georgia, "Iowan Old Style", serif;
-  font-size: 11pt; font-weight: 600; margin: 0.85rem 0 0.22rem;
+  font-size: 11pt; font-weight: 600; margin: 0.7rem 0 0.2rem;
   break-after: avoid; page-break-after: avoid;
 }
 h4{
@@ -161,9 +161,9 @@ def inline(text: str) -> str:
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"(?<![\w*])\*([^*\n]+)\*(?![\w*])", r"<em>\1</em>", text)
     text = LABEL.sub(r'<span class="lbl">[\1]</span>', text)
-    # NO em-dash substitution. An earlier version turned " - " into " — " as a
-    # typographic nicety; on a submission judged against an AI answer, the em
-    # dash is the single most recognisable model tell. Hyphens stay hyphens.
+    # NO em-dash substitution. An earlier version rewrote " - " into an em dash
+    # as a typographic nicety; on a submission judged against an AI answer, the
+    # em dash is the single most recognisable model tell. Hyphens stay hyphens.
     text = text.replace("->", "&rarr;")
 
     for i, slot in enumerate(slots):

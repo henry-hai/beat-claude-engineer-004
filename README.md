@@ -55,7 +55,7 @@ quoted in the written answer is produced by the tool rather than typed by hand.
 
 ## What it found
 
-All figures **[Observed]** — produced by the command above, reproducible by
+All figures **[Observed]**, produced by the command above and reproducible by
 anyone who clones this repo.
 
 | | |
@@ -66,8 +66,8 @@ anyone who clones this repo.
 | Normalized from a legacy SDK shape | 1 (`evt-0009`) |
 | Findings | 21 |
 | Distinct anomaly classes | **13** |
-| — answerable from one event | 9 |
-| — requiring memory of other events | 4 |
+| of which answerable from one event | 9 |
+| of which requiring memory of other events | 4 |
 | By severity | 7 critical, 10 warn, 4 info |
 
 **That 9/4 split is itself an architectural finding.** Duplicate delivery,
@@ -95,19 +95,19 @@ event-at-a-time path, measuring staleness at first availability.
 
 Measured per-event processing cost: **0.017 ms mean, 0.042 ms max**
 [Observed]. The window is **[Assumed]** at 15 minutes, anchored to the brief's
-own statement of 15–30 minute current dashboard latency.
+own statement of 15 to 30 minute current dashboard latency.
 
 The point is the ratio between those two things. Processing costs microseconds;
 the window costs minutes. **Latency in the current architecture is dominated by
-when the job runs, not by how long the work takes** — so the sub-5-second target
-is unreachable behind any batch window, regardless of how fast the processing
-becomes. That is the argument for streaming, and it does not rest on any claim
+when the job runs, not by how long the work takes.** The sub-5-second target is
+unreachable behind a batch window measured in minutes, regardless of how fast
+the processing becomes. That is the argument for streaming, and it does not rest on any claim
 about a broker.
 
 Three clock-anomalous events (`evt-0005`, `evt-0006`, `evt-0016`) are
 partitioned out and named in the report rather than silently dropped. A client
 clock running ahead of the server makes an event appear to become visible
-before it happened, which corrupts the mean without corrupting the median —
+before it happened, which corrupts the mean without corrupting the median:
 the same contamination that makes a far-future timestamp dangerous to a
 watermark, surfacing in a second metric.
 
@@ -128,8 +128,8 @@ data accuracy?" is a question the brief actually asks:
    coincidence.
 2. **Property tests** on purity itself: classifiers must not mutate their
    input and must be order-independent. If that ever stops holding, the claim
-   that this code lifts into a stream processor unchanged is dead, and the
-   suite says so.
+   that these functions port into a stream operator without rewriting their
+   logic is dead, and the suite says so.
 3. **Fixture regression** pinning the exact counts above, plus the fixture's
    own SHA-256. Any rule change that moves a number fails loudly and names
    what moved. This is the layer that would catch a bad deploy.
@@ -146,7 +146,7 @@ data accuracy?" is a question the brief actually asks:
   rate, a loss rate, or a distribution. See the written answer for what I
   refused to conclude from it and why.
 
-Every threshold in the code is **[Assumed]** — a starting policy that makes the
+Every threshold in the code is **[Assumed]**, a starting policy that makes the
 design concrete, not a value measured from production. They are named module
 constants specifically so they are easy to find and argue with.
 
@@ -165,15 +165,15 @@ work rather than onto tidiness:
 | `pipeline/run.py` | wires them, writes the sinks | job graph + sinks |
 
 Everything in `normalize.py` and `rules.py` is a pure function of a single
-event, which is exactly the contract a stream processor needs — so those lift
-into production unchanged. Everything that could not satisfy that contract was
-pushed into `state.py` rather than smuggled in, and every store there is
-bounded, because unbounded state at 50M events/day is a memory leak with a
-schedule.
+event, which is exactly the contract a stream operator needs, so those functions
+port into a PyFlink map without rewriting their logic. Anything that could not
+satisfy that contract went into `state.py` rather than being smuggled in, and
+every store there is bounded, because unbounded state at 50M events/day is a
+memory leak with a schedule.
 
 **Nothing in this repo deletes or corrects an event.** Classifiers label; what
 to do with a label is a policy decision belonging to the operator. Several of
-these signals are deliberately too weak to act on alone — a referrer hostname
+these signals are deliberately too weak to act on alone: a referrer hostname
 containing "bot" is suggestive and nothing more, and if that heuristic is wrong
 and the events were deleted, real customer data is gone with no recovery.
 
@@ -198,7 +198,7 @@ shasum -a 256 fixtures/event_sample.jsonl
 `.gitattributes` pins `*.jsonl` with `-text` so Git never translates line
 endings for this file. Without that pin, cloning on Windows rewrites all 25
 line endings to CRLF, changing the file to 5774 bytes and producing a different
-hash — same text to a human, different bytes to SHA-256. The pin means the
+hash: same text to a human, different bytes to SHA-256. The pin means the
 checksum above reproduces on Windows, macOS, and Linux alike.
 
 ---
@@ -209,6 +209,7 @@ checksum above reproduces on Windows, macOS, and Linux alike.
 pipeline/       the artifact
 fixtures/       the challenge fixture, line-ending pinned
 results/        committed output, so the findings are readable without running anything
-submission/     the written answer
-tests/          tests over the pure classifiers
+submission/     the written answer and the submitted PDF
+tests/          50 tests over the pure classifiers
+tools/          Markdown to PDF renderer, and a headless page-count check
 ```
