@@ -1,7 +1,7 @@
 {
   "region": "us-east-1 (US East, N. Virginia)",
   "prices_retrieved": "2026-08-04",
-  "generated_at": "2026-08-05T14:17:30+00:00",
+  "generated_at": "2026-08-05T18:32:29+00:00",
   "sizing": {
     "events_per_second_avg": 578.7037037037037,
     "events_per_second_peak": 5787.0370370370365,

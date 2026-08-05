@@ -3,7 +3,7 @@ AWS COST MODEL - real-time analytics pipeline
 ==============================================================================
 region         : us-east-1 (US East, N. Virginia)
 prices retrieved: 2026-08-04 from the AWS pricing pages cited below
-generated_at   : 2026-08-05T14:17:30+00:00
+generated_at   : 2026-08-05T18:32:29+00:00
 
 ------------------------------------------------------------------------------
 SIZING
