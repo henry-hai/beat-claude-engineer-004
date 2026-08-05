@@ -1,0 +1,186 @@
+{
+  "region": "us-east-1 (US East, N. Virginia)",
+  "prices_retrieved": "2026-08-04",
+  "generated_at": "2026-08-05T01:05:49+00:00",
+  "sizing": {
+    "events_per_second_avg": 578.7037037037037,
+    "events_per_second_peak": 5787.0370370370365,
+    "bytes_per_second_avg": 132523.14814814815,
+    "peak_mb_per_second": 1.3252314814814814,
+    "shards_by_records": 5.787037037037036,
+    "shards_by_bytes": 1.3252314814814814,
+    "binding_constraint": "records/s",
+    "shards_provisioned": 8,
+    "gb_per_day_raw": 11.45,
+    "gb_per_month_raw": 343.5,
+    "gb_per_month_compressed": 68.7,
+    "events_per_month": 1500000000,
+    "kpus": 4
+  },
+  "monthly_cost": {
+    "Kinesis Data Streams - shards": 87.6,
+    "Kinesis Data Streams - PUT units": 21.0,
+    "Managed Flink - compute": 321.2,
+    "Managed Flink - state storage": 20.0,
+    "S3 event lake - storage (end of yr 1)": 21.846600000000002,
+    "S3 event lake - requests": 0.21600000000000003,
+    "DynamoDB - profile writes": 937.5,
+    "DynamoDB - personalisation reads": 18.75,
+    "DynamoDB - storage": 125.0,
+    "ElastiCache Redis - nodes": 255.792
+  },
+  "total": 1808.9046,
+  "ceiling": 50000,
+  "inputs": {
+    "BUDGET_CEILING": {
+      "value": 50000,
+      "unit": "USD/month",
+      "label": "[Observed]",
+      "source": "brief: 'Budget: $50K/month infrastructure ceiling'"
+    },
+    "DDB_READ_PER_MILLION": {
+      "value": 0.125,
+      "unit": "USD/million RRU",
+      "label": "[Benchmarked]",
+      "source": "aws.amazon.com/dynamodb/pricing/on-demand/"
+    },
+    "DDB_READ_RATIO": {
+      "value": 0.1,
+      "unit": "reads/event",
+      "label": "[Assumed]",
+      "source": "fraction of events that trigger a personalisation lookup"
+    },
+    "DDB_STORAGE_GB": {
+      "value": 500,
+      "unit": "GB",
+      "label": "[Assumed]",
+      "source": "visitor profile store across 500 tenants, steady state"
+    },
+    "DDB_STORAGE_GB_MONTH": {
+      "value": 0.25,
+      "unit": "USD/GB-month",
+      "label": "[Benchmarked]",
+      "source": "aws.amazon.com/dynamodb/pricing/on-demand/"
+    },
+    "DDB_WRITES_PER_EVENT": {
+      "value": 1.0,
+      "unit": "writes/event",
+      "label": "[Assumed]",
+      "source": "naive model: one visitor-profile update per event. See WRITE AMPLIFICATION in the output - this is the single most expensive assumption in the model"
+    },
+    "DDB_WRITE_PER_MILLION": {
+      "value": 0.625,
+      "unit": "USD/million WRU",
+      "label": "[Benchmarked]",
+      "source": "aws.amazon.com/dynamodb/pricing/on-demand/"
+    },
+    "ELASTICACHE_NODES": {
+      "value": 2,
+      "unit": "nodes",
+      "label": "[Assumed]",
+      "source": "primary plus one replica for failover"
+    },
+    "ELASTICACHE_R7G_LARGE_HOUR": {
+      "value": 0.1752,
+      "unit": "USD/node-hour",
+      "label": "[Benchmarked]",
+      "source": "aws.amazon.com/elasticache/pricing/ cache.r7g.large - taken from a worked example on the page, not from a rate table; confirm before committing budget"
+    },
+    "EVENTS_PER_DAY": {
+      "value": 50000000,
+      "unit": "events/day",
+      "label": "[Observed]",
+      "source": "brief: '~50M events/day'"
+    },
+    "FLINK_KPUS": {
+      "value": 4,
+      "unit": "KPU",
+      "label": "[Assumed]",
+      "source": "1 KPU = 1 vCPU + 4GB. Throughput per KPU is entirely job-dependent and this is the least defensible number in the model. Sensitivity is reported below"
+    },
+    "FLINK_KPU_HOUR": {
+      "value": 0.11,
+      "unit": "USD/KPU-hour",
+      "label": "[Benchmarked]",
+      "source": "aws.amazon.com/managed-service-apache-flink/pricing/"
+    },
+    "FLINK_STORAGE_GB_MONTH": {
+      "value": 0.1,
+      "unit": "USD/GB-month",
+      "label": "[Benchmarked]",
+      "source": "aws.amazon.com/managed-service-apache-flink/pricing/ (50GB allocated per KPU)"
+    },
+    "HEADROOM": {
+      "value": 1.3,
+      "unit": "x",
+      "label": "[Assumed]",
+      "source": "provision 30% above the modelled peak so a spike does not land exactly at capacity; the alternative is discovering the ceiling during Black Friday"
+    },
+    "KINESIS_MB_PER_SHARD": {
+      "value": 1.0,
+      "unit": "MB/s/shard",
+      "label": "[Benchmarked]",
+      "source": "same page as above"
+    },
+    "KINESIS_PUT_UNITS_PER_MILLION": {
+      "value": 0.014,
+      "unit": "USD/million PUT units",
+      "label": "[Benchmarked]",
+      "source": "aws.amazon.com/kinesis/data-streams/pricing/"
+    },
+    "KINESIS_RECORDS_PER_SHARD": {
+      "value": 1000,
+      "unit": "records/s/shard",
+      "label": "[Benchmarked]",
+      "source": "aws.amazon.com/kinesis/data-streams/pricing/: 'One shard provides an ingest capacity of 1 MB/second or 1,000 records/second'"
+    },
+    "KINESIS_SHARD_HOUR": {
+      "value": 0.015,
+      "unit": "USD/shard-hour",
+      "label": "[Benchmarked]",
+      "source": "aws.amazon.com/kinesis/data-streams/pricing/"
+    },
+    "LAKE_MONTHS": {
+      "value": 12,
+      "unit": "months",
+      "label": "[Assumed]",
+      "source": "S3 cost shown at end of year one, when it is largest"
+    },
+    "MEAN_EVENT_BYTES": {
+      "value": 229,
+      "unit": "bytes/event",
+      "label": "[Observed]",
+      "source": "measured over fixtures/event_sample.jsonl: 25 events, mean 229B, median 228B, range 200-285B"
+    },
+    "PARQUET_COMPRESSION": {
+      "value": 5.0,
+      "unit": "x",
+      "label": "[Assumed]",
+      "source": "columnar Parquet with Snappy over highly repetitive JSON event data; unverified for this payload shape and worth measuring in week one"
+    },
+    "S3_FLUSH_SECONDS": {
+      "value": 60,
+      "unit": "s",
+      "label": "[Assumed]",
+      "source": "how often the stream job writes a file to S3; trades object count against freshness of the lake, and does not affect dashboard latency"
+    },
+    "S3_PUT_PER_1000": {
+      "value": 0.005,
+      "unit": "USD/1000 requests",
+      "label": "[Benchmarked]",
+      "source": "aws.amazon.com/s3/pricing/"
+    },
+    "S3_STANDARD_GB_MONTH": {
+      "value": 0.0265,
+      "unit": "USD/GB-month",
+      "label": "[Benchmarked]",
+      "source": "aws.amazon.com/s3/pricing/ (first 50TB tier)"
+    },
+    "SPIKE_MULTIPLIER": {
+      "value": 10,
+      "unit": "x",
+      "label": "[Observed]",
+      "source": "brief: 'handle 50M+ events/day and 10x traffic spikes'"
+    }
+  }
+}
