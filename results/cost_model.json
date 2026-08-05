@@ -1,7 +1,7 @@
 {
   "region": "us-east-1 (US East, N. Virginia)",
   "prices_retrieved": "2026-08-04",
-  "generated_at": "2026-08-05T01:05:49+00:00",
+  "generated_at": "2026-08-05T14:17:30+00:00",
   "sizing": {
     "events_per_second_avg": 578.7037037037037,
     "events_per_second_peak": 5787.0370370370365,
@@ -37,6 +37,12 @@
       "unit": "USD/month",
       "label": "[Observed]",
       "source": "brief: 'Budget: $50K/month infrastructure ceiling'"
+    },
+    "DASHBOARD_P95_SLO": {
+      "value": 1.0,
+      "unit": "s",
+      "label": "[Assumed]",
+      "source": "dashboard query p95. The product promises sub-5-second freshness; if the QUERY alone spends a second, the end-to-end budget is already half gone"
     },
     "DDB_READ_PER_MILLION": {
       "value": 0.125,
@@ -92,6 +98,12 @@
       "label": "[Observed]",
       "source": "brief: '~50M events/day'"
     },
+    "EVENT_TYPES": {
+      "value": 4,
+      "unit": "types",
+      "label": "[Observed]",
+      "source": "brief: 'page views, clicks, form submissions, custom events'"
+    },
     "FLINK_KPUS": {
       "value": 4,
       "unit": "KPU",
@@ -115,6 +127,18 @@
       "unit": "x",
       "label": "[Assumed]",
       "source": "provision 30% above the modelled peak so a spike does not land exactly at capacity; the alternative is discovering the ceiling during Black Friday"
+    },
+    "HOT_BUCKET_SECONDS": {
+      "value": 60,
+      "unit": "s",
+      "label": "[Assumed]",
+      "source": "1-minute rollup granularity for the real-time dashboard"
+    },
+    "HOT_RETENTION_HOURS": {
+      "value": 48,
+      "unit": "h",
+      "label": "[Assumed]",
+      "source": "how long 1-minute granularity is kept before rolling up to hourly"
     },
     "KINESIS_MB_PER_SHARD": {
       "value": 1.0,
@@ -158,6 +182,18 @@
       "label": "[Assumed]",
       "source": "columnar Parquet with Snappy over highly repetitive JSON event data; unverified for this payload shape and worth measuring in week one"
     },
+    "PATHS_PER_TENANT": {
+      "value": 50,
+      "unit": "distinct paths",
+      "label": "[Assumed]",
+      "source": "THE UNKNOWN. A marketing site's trackable page count. The brief does not state it and it cannot be inferred from a 25-event fixture. This is the input the tripwire exists to measure in production"
+    },
+    "POSTGRES_HOT_ROW_CEILING": {
+      "value": 250000000,
+      "unit": "rows",
+      "label": "[Assumed]",
+      "source": "the point at which a partitioned Postgres rollup table stops being comfortable for sub-second dashboard queries on modest hardware. NOT a measured limit - it is the threshold that triggers a real load test, not an automatic migration"
+    },
     "S3_FLUSH_SECONDS": {
       "value": 60,
       "unit": "s",
@@ -181,6 +217,12 @@
       "unit": "x",
       "label": "[Observed]",
       "source": "brief: 'handle 50M+ events/day and 10x traffic spikes'"
+    },
+    "TENANTS": {
+      "value": 500,
+      "unit": "tenants",
+      "label": "[Observed]",
+      "source": "brief: 'multi-tenant architecture (500+ customers)'"
     }
   }
 }

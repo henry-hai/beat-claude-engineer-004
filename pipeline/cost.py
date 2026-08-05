@@ -151,6 +151,105 @@ LAKE_MONTHS = Input(
     12, "months", "[Assumed]", "S3 cost shown at end of year one, when it is largest"
 )
 
+# --------------------------------------------------------------------------
+# Serving-tier tripwire
+#
+# The MVP serves dashboards from pre-aggregated rollups in PostgreSQL, which
+# the team already operates. That is a REVERSIBLE decision, not a permanent
+# one, and the condition under which it stops being correct is computed here
+# rather than asserted in prose.
+#
+# The unknown is path cardinality per tenant. The brief does not contain it,
+# and it is the single input that decides Postgres versus a columnar store.
+# So the decision is deliberately deferred to a measured threshold.
+# --------------------------------------------------------------------------
+
+TENANTS = Input(500, "tenants", "[Observed]", "brief: 'multi-tenant architecture (500+ customers)'")
+EVENT_TYPES = Input(
+    4, "types", "[Observed]",
+    "brief: 'page views, clicks, form submissions, custom events'",
+)
+PATHS_PER_TENANT = Input(
+    50, "distinct paths", "[Assumed]",
+    "THE UNKNOWN. A marketing site's trackable page count. The brief does not "
+    "state it and it cannot be inferred from a 25-event fixture. This is the "
+    "input the tripwire exists to measure in production",
+)
+HOT_BUCKET_SECONDS = Input(
+    60, "s", "[Assumed]", "1-minute rollup granularity for the real-time dashboard"
+)
+HOT_RETENTION_HOURS = Input(
+    48, "h", "[Assumed]",
+    "how long 1-minute granularity is kept before rolling up to hourly",
+)
+POSTGRES_HOT_ROW_CEILING = Input(
+    250_000_000, "rows", "[Assumed]",
+    "the point at which a partitioned Postgres rollup table stops being "
+    "comfortable for sub-second dashboard queries on modest hardware. NOT a "
+    "measured limit - it is the threshold that triggers a real load test, not "
+    "an automatic migration",
+)
+DASHBOARD_P95_SLO = Input(
+    1.0, "s", "[Assumed]",
+    "dashboard query p95. The product promises sub-5-second freshness; if the "
+    "QUERY alone spends a second, the end-to-end budget is already half gone",
+)
+
+
+def tripwire() -> dict:
+    """Compute when Postgres stops being the right serving tier.
+
+    Rollup tables are SPARSE, and getting this wrong changes the architecture.
+    A first pass at this model multiplied tenants x paths x event types x time
+    buckets - the full cartesian product - and concluded Postgres was already
+    over capacity before launch. That is wrong: it assumes every path receives
+    every event type in every single minute.
+
+    The real bound is traffic. A tenant averaging N events per bucket can
+    populate at most N distinct rows in that bucket, however many paths it has.
+    So rows per bucket is min(cartesian, events), and at this volume the
+    EVENT COUNT binds, not the path count.
+
+    Same class of mistake as sizing Kinesis on bandwidth instead of record
+    count, in the opposite direction. Both come from modelling the shape of the
+    data instead of its volume.
+    """
+    buckets_hot = HOT_RETENTION_HOURS.value * 3600 / HOT_BUCKET_SECONDS.value
+    buckets_per_day = 86_400 / HOT_BUCKET_SECONDS.value
+
+    cartesian_per_bucket = PATHS_PER_TENANT.value * EVENT_TYPES.value
+    events_per_tenant_per_bucket = (
+        EVENTS_PER_DAY.value / TENANTS.value / buckets_per_day
+    )
+    # Worst case: every event in a bucket lands on a distinct (path, type) pair.
+    rows_per_bucket = min(cartesian_per_bucket, events_per_tenant_per_bucket)
+    binding = "path cardinality" if cartesian_per_bucket < events_per_tenant_per_bucket else "event volume"
+
+    rows_per_tenant = rows_per_bucket * buckets_hot
+    hot_rows = rows_per_tenant * TENANTS.value
+    ceiling = POSTGRES_HOT_ROW_CEILING.value
+
+    # Cardinality at which the cross-product starts binding instead of volume,
+    # i.e. the point where adding tracked paths begins to cost rows.
+    paths_where_cardinality_binds = events_per_tenant_per_bucket / EVENT_TYPES.value
+
+    # Traffic-per-tenant multiple that would reach the ceiling, all else equal.
+    growth_to_ceiling = ceiling / hot_rows if hot_rows else None
+
+    return {
+        "hot_buckets_retained": buckets_hot,
+        "cartesian_rows_per_bucket": cartesian_per_bucket,
+        "events_per_tenant_per_bucket": events_per_tenant_per_bucket,
+        "rows_per_bucket": rows_per_bucket,
+        "binding_constraint": binding,
+        "rows_per_tenant": rows_per_tenant,
+        "hot_rows_modelled": hot_rows,
+        "postgres_row_ceiling": ceiling,
+        "utilisation": hot_rows / ceiling,
+        "paths_where_cardinality_binds": paths_where_cardinality_binds,
+        "headroom_multiple": growth_to_ceiling,
+    }
+
 
 def size(spike: float, kpus: int) -> dict:
     events_day = EVENTS_PER_DAY.value
@@ -318,6 +417,56 @@ def render(s: dict, lines: dict, spike: float) -> str:
     add("")
     add("  Given the headroom above, neither is likely to change the conclusion -")
     add("  but that is a prediction, not a calculation, and it is labelled as such.")
+    add("")
+    t = tripwire()
+    add("-" * 78)
+    add("SERVING-TIER TRIPWIRE - when Postgres stops being the right answer")
+    add("-" * 78)
+    add("  The MVP serves dashboards from pre-aggregated rollups in PostgreSQL,")
+    add("  which this team already runs. That is a reversible decision. Here is the")
+    add("  condition that reverses it, computed rather than asserted.")
+    add("")
+    add(f"  1-minute buckets retained hot        {t['hot_buckets_retained']:>15,.0f}   ({HOT_RETENTION_HOURS.value:.0f}h)")
+    add(f"  cartesian rows/bucket/tenant        {t['cartesian_rows_per_bucket']:>15,.0f}   (paths x event types)")
+    add(f"  events/bucket/tenant                {t['events_per_tenant_per_bucket']:>15,.0f}   (traffic bound)")
+    add(f"  rows/bucket/tenant = min of those   {t['rows_per_bucket']:>15,.0f}")
+    add(f"  BINDING CONSTRAINT                  {t['binding_constraint']:>15}")
+    add("")
+    add(f"  rollup rows per tenant              {t['rows_per_tenant']:>15,.0f}")
+    add(f"  hot rollup rows, 500 tenants        {t['hot_rows_modelled']:>15,.0f}")
+    add(f"  Postgres comfort ceiling            {t['postgres_row_ceiling']:>15,.0f}   [Assumed]")
+    add(f"  utilisation                         {t['utilisation'] * 100:>14,.1f}%")
+    add(f"  headroom                            {t['headroom_multiple']:>14,.1f}x")
+    add("")
+    add("  Rollups are SPARSE. A tenant averaging 69 events a minute cannot fill")
+    add("  200 (path x type) buckets, so row count is bounded by TRAFFIC, not by")
+    add("  how many pages the customer tracks. Modelling the cross-product instead")
+    add("  overstates this by ~3x and would have picked the wrong architecture.")
+    add("")
+    add("  THE TRIPWIRE, three conditions. Any one fires a migration review:")
+    add("")
+    add(f"    1. CAPACITY   hot rollup rows exceed {t['postgres_row_ceiling']:,.0f}, which at")
+    add(f"                  current shape means ~{t['headroom_multiple']:,.1f}x growth in events per tenant.")
+    add(f"                  Path cardinality only starts to matter above ~{t['paths_where_cardinality_binds']:,.0f} paths")
+    add(f"                  per tenant (modelled at {PATHS_PER_TENANT.value:,.0f}); below that, traffic binds")
+    add(f"    2. LATENCY    dashboard query p95 exceeds {DASHBOARD_P95_SLO.value:.1f}s over a 7-day window")
+    add("    3. FRESHNESS  rollup write lag exceeds 30s at p95")
+    add("")
+    add("  Condition 1 is a leading indicator - it fires before customers feel")
+    add("  anything. Conditions 2 and 3 are trailing: by then they already have.")
+    add("  Alerting on 1 is the point of computing it.")
+    add("")
+    add("  WHY DEFER RATHER THAN COMMIT: growth in events per tenant is what")
+    add("  decides this, and the brief gives a fleet-wide total rather than a")
+    add("  per-tenant distribution. 500 tenants averaging 100k events/day is a")
+    add("  very different system from 20 tenants at 2M and 480 at 8k, and the")
+    add("  brief does not say which it is. Committing to a columnar store on day")
+    add("  one is not more rigorous than deferring - it is guessing with more")
+    add("  confidence. The MVP ships on infrastructure the team already operates,")
+    add("  and the threshold that would prove that wrong is instrumented in week")
+    add("  one. Per-tenant distribution is the first thing I would measure.")
+    add("")
+    add("  This is an option held, not a migration scheduled. It may never fire.")
     add("=" * 78)
     return "\n".join(out)
 
