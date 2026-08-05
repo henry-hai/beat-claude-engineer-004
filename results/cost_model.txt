@@ -3,7 +3,7 @@ AWS COST MODEL - real-time analytics pipeline
 ==============================================================================
 region         : us-east-1 (US East, N. Virginia)
 prices retrieved: 2026-08-04 from the AWS pricing pages cited below
-generated_at   : 2026-08-05T18:32:29+00:00
+generated_at   : 2026-08-05T22:42:44+00:00
 
 ------------------------------------------------------------------------------
 SIZING
@@ -79,7 +79,7 @@ SENSITIVITY
   every assumption wrong by  5x  ->  $     9,045/month   under ceiling
   every assumption wrong by 10x  ->  $    18,089/month   under ceiling
 
-  The conclusion survives to roughly 28x. That is what makes it safe to say
+  The conclusion survives to 27x. That is what makes it safe to say
   the budget is not the constraint, rather than merely hoping so.
 
 ------------------------------------------------------------------------------
