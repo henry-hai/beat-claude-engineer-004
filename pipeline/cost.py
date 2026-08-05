@@ -402,7 +402,7 @@ def render(s: dict, lines: dict, spike: float) -> str:
         verdict = "under ceiling" if scaled < ceiling else "OVER CEILING"
         add(f"  every assumption wrong by {factor:>2}x  ->  ${scaled:>10,.0f}/month   {verdict}")
     add("")
-    add("  The conclusion survives to roughly 28x. That is what makes it safe to say")
+    add(f"  The conclusion survives to {int(ceiling / total)}x. That is what makes it safe to say")
     add("  the budget is not the constraint, rather than merely hoping so.")
     add("")
     add("-" * 78)
