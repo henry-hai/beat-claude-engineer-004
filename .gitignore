@@ -15,3 +15,5 @@ Thumbs.db
 
 # Generated submission binaries (the .md is the source of truth)
 submission/*.pdf
+# Layout scratch preview, not a deliverable
+submission/preview.html
