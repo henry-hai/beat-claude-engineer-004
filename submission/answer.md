@@ -168,7 +168,7 @@ server-assigned `event_id` cannot detect loss at all. See section 5.
 operate; **sacrificing** peak cost efficiency and, in the MVP, query
 flexibility. Modeled infrastructure is $1,809/month, 3.6% of the ceiling
 [Estimated] from [Benchmarked] AWS prices, and that survives every assumption
-being wrong by 28x. **The $50K ceiling is not the binding constraint. Two
+being wrong by 27x. **The $50K ceiling is not the binding constraint. Two
 engineers and three months are.** That inverts the usual build-versus-buy call:
 self-managed Kafka is cheaper per byte and spends the scarcer resource.
 DynamoDB is 60% of the total and profile writes alone are 52% [Estimated],
@@ -203,17 +203,17 @@ event, 4 requiring memory of others [Observed]. Full output with every
 |---|---|---|
 | Malformed JSON | `evt-0020` | Dead-lettered, bytes intact; consumer continues |
 | Duplicate delivery | `evt-0002` | Dedupe on `(tenant_id, event_id)` before counting |
-| Schema drift / no server clock | `evt-0009` | Normalized at the edge; `received_at` left null, never invented |
+| Schema drift **+** missing server clock | `evt-0009` | Normalized at the edge; `received_at` left null, never invented |
 | Null tenant | `evt-0011` | Quarantined; never attributed by inference |
 | Clock skew, 3 magnitudes | `evt-0005`, `-0006`, `-0016` | Ladder: 47s, 65min, 365d. Excluded from windowed math, not corrected |
 | Far-future timestamp | `evt-0016` | Quarantined pre-windowing; would advance the watermark past every real window |
-| Bot traffic | `evt-0012`-`-0015` | Two signals: referrer, and 4 events in 50ms. Quarantined, never deleted |
+| Bot traffic: referrer **+** burst | `evt-0012`-`-0015` | Two signals: referrer, and 4 events in 50ms. Quarantined, never deleted |
 | PII in properties | `evt-0007` | Caught by key name and value shape; tagged for deletion tooling |
 | Privacy request in-stream | `evt-0017` | Routed to the deletion workflow, not counted as behavior |
 | Deletion scope | `evt-0017` | Resolved via identity graph; reaches `evt-0006`, written anonymously |
 | Identity stitching | `evt-0003`, `-0008`, `-0017`, `-0022` | History re-attributed retroactively |
 | Client-asserted aggregate | `evt-0019` | Stored with provenance, never source of truth. See section 5 |
-| *all rows* | *25 lines* | *[Observed], regenerate via `pipeline/run.py`* |
+| *13 classes, 12 rows* | *25 lines* | *[Observed], regenerate via `pipeline/run.py`* |
 
 **The 9/4 split is itself an architectural finding.** Those four cannot be
 answered by a stateless consumer at any price, which is the argument for keyed
