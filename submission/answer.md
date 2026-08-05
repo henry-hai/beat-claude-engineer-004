@@ -1,4 +1,4 @@
-# Real-Time Analytics Pipeline - Engineer 004
+# Real-Time Analytics Pipeline: Engineer 004
 
 **Brief version: 2026-07** | Henry Hai Nguyen
 Fixture worked from: `fixtures/event_sample.jsonl`, SHA-256 [Observed]
@@ -27,8 +27,9 @@ Every number here regenerates from `pipeline/run.py`, `pipeline/latency.py` and
 
 Every answer to this brief will open by picking a broker. That is the least
 interesting decision on the table. Kinesis, MSK and self-managed Kafka all move
-bytes, all publish pricing, all carry an SLA; pick any of the three and you
-will be fine.
+bytes, all publish pricing, all carry an SLA. Any of the three would work here,
+which is exactly why it is not where the risk lives. I still pick one below,
+and the deciding reason turns out to be operational rather than technical.
 
 What will hurt you is in the ingest path, and the sample data proves it. Three
 events break a constraint the brief calls non-negotiable, and none look broken
@@ -40,8 +41,8 @@ at a glance [Observed], all traceable in `results/findings.json`:
 - **`evt-0007`** carries a raw email and phone while `user_id` is null;
   **`evt-0022`** resolves that visitor to `u-7304` fifteen events later. And
   **`evt-0017`** demands GDPR deletion for `u-1077`, whose history includes
-  **`evt-0006`**, written while anonymous. Delete by `user_id` and you miss it
-  - an incomplete deletion is a regulatory failure, not a bug.
+  **`evt-0006`**, written while anonymous. Delete by `user_id` and you miss it;
+  an incomplete deletion is a regulatory failure, not a bug.
 - **`evt-0011`** has no `tenant_id` [Observed]. Across 500 tenants, guessing is
   not a data quality issue; it is one customer seeing another's visitors.
 
@@ -53,7 +54,7 @@ So ingest is the component I built, ran, and measured.
 flowchart LR
   SDK["JavaScript SDK<br/>unchanged"] --> GW["API Gateway<br/>+ Lambda"]
   GW --> KDS[("Kinesis<br/>Data Streams")]
-  KDS --> FL["<b>Managed Flink</b><br/>normalize - classify<br/>keyed state"]
+  KDS --> FL["<b>Managed Flink</b><br/>normalize, classify<br/>keyed state"]
   FL -. malformed .-> DLQ[("Dead-letter<br/>S3")]
   FL ==> DDB[("DynamoDB<br/>visitor state")] ==> PERS["Personalization<br/>API"]
   FL ==> PG[("Postgres<br/>rollups")] ==> DASH["Real-time<br/>dashboard"]
@@ -70,31 +71,31 @@ malformed record must never stop the consumer.
 | Ingest | Kinesis Data Streams | MSK, self-managed Kafka | Modeled infrastructure is 3.6% of the ceiling [Estimated], so engineer-hours are scarcer than dollars. MSK is cheaper per byte and costs broker operations two engineers do not have. |
 | Processing | Managed Flink | Lambda, ECS consumers | Four of the thirteen checks the detector performs cannot be answered from a single event [Observed]. Those need checkpointed keyed state, which a stateless consumer cannot provide at any price. |
 | Visitor state | DynamoDB | Redis-only, Postgres | Single-digit-millisecond point lookups on the personalization path, per-tenant partition keys, no capacity planning. |
-| Dashboard serving | Postgres rollups | ClickHouse, OpenSearch | The team already runs PostgreSQL. Aggregation happens upstream, so it stores summaries rather than raw events. Reversible - see the tripwire in section 3. |
+| Dashboard serving | Postgres rollups | ClickHouse, OpenSearch | The team already runs PostgreSQL. Aggregation happens upstream, so it stores summaries rather than raw events. Reversible; see the tripwire in section 3. |
 | Event lake | S3 + Athena | Redshift | The brief requires export to Snowflake and BigQuery; Parquet on S3 is the neutral format both read. |
-| Hot cache | ElastiCache Redis | - | Already in their stack. Segment membership, not raw events. |
+| Hot cache | ElastiCache Redis | none | Already in their stack. Segment membership, not raw events. |
 
 Unit prices and per-component lines: `results/cost_model.json` [Benchmarked].
 
 **The stateless/stateful split is the load-bearing choice.** Normalization and
 per-event classification are pure functions of one event, so any worker can
 process any record. Duplicate detection, burst detection, identity stitching and
-deletion scope are not - they depend on what that worker has seen. That
+deletion scope are not; they depend on what that worker has seen. That
 boundary, not the broker, decides whether this needs Flink-class state: 9 checks
 on one side, 4 on the other [Observed].
 
 ### Event structure and identity
 
-One canonical envelope - `event_id`, `tenant_id`, `anonymous_id`, `user_id`,
-`type`, `ts`, `received_at`, `properties` - with legacy names mapped at the edge
+One canonical envelope (`event_id`, `tenant_id`, `anonymous_id`, `user_id`,
+`type`, `ts`, `received_at`, `properties`), with legacy names mapped at the edge
 from a lookup table rather than in code, so registering the next SDK generation
 is a config change. Every transformation is recorded, so the pipeline can always
 answer *what did you change about this event?* `ts` is the browser's clock,
 `received_at` is ours; both are kept and neither "corrects" the other.
 
 **Identity resolves backwards.** A visitor browses anonymously, signs in, and
-their earlier events become theirs retroactively - four such stitches in 25
-lines [Observed], including `anon-3d0` to `u-7304`, which retroactively attaches
+their earlier events become theirs retroactively. Four such stitches appear in
+25 lines [Observed], including `anon-3d0` to `u-7304`, which retroactively attaches
 `evt-0007`'s personal data to a named person. Deletion therefore runs against
 the identity graph in durable storage, never the bounded in-memory window, which
 returns a lower bound rather than the truth. See `pipeline/state.py`.
@@ -110,15 +111,16 @@ spike [Estimated]. At the 229-byte mean event size measured on the fixture
 A Kinesis shard gives 1 MB/s **or** 1,000 records/second [Benchmarked]. The
 peak therefore needs 1.3 shards by bandwidth and 5.8 by record count
 [Estimated]. **Record count binds.** A shard saturates its record limit while
-using 23% of its bandwidth, so sizing on throughput under-provisions by ~4x -
-one plausible mechanism behind "crashes during traffic spikes." Provisioned at
+using 23% of its bandwidth, so sizing on throughput under-provisions by roughly
+4x. That is one plausible mechanism behind "crashes during traffic spikes."
+Provisioned at
 8 shards, 30% headroom [Assumed]; derivation in `results/cost_model.json`. That
 result exists only because the event size was measured, not guessed.
 
 ### Zero loss, and what degrades first
 
 Delivery is at-least-once, so dedupe keys on `(tenant_id, event_id)`, not
-`event_id` alone - SDKs do not coordinate IDs across customers, and collapsing
+`event_id` alone, because SDKs do not coordinate IDs across customers and collapsing
 them deletes one tenant's event on another's collision. `evt-0002` appears
 twice, 7.4 seconds apart: a retry [Observed].
 
@@ -158,7 +160,7 @@ loss at all. See section 5.
 operate; **sacrificing** peak cost efficiency and, in the MVP, query
 flexibility. Modeled infrastructure is $1,809/month, 3.6% of the ceiling
 [Estimated] from [Benchmarked] AWS prices, and that survives every assumption
-being wrong by 28x. **The $50K ceiling is not the binding constraint - two
+being wrong by 28x. **The $50K ceiling is not the binding constraint. Two
 engineers and three months are.** That inverts the usual build-versus-buy call:
 self-managed Kafka is cheaper per byte and spends the scarcer resource.
 
@@ -169,7 +171,7 @@ retention, real-time backfill, and cross-tenant benchmarking.
 Dashboards come from pre-aggregated rollups in PostgreSQL, which this team
 already runs. At the modeled shape that table holds 100M hot rows against an
 assumed 250M ceiling: 40% utilization, 2.5x headroom [Estimated]. Three
-conditions trigger a migration review - rows past the ceiling (leading),
+conditions trigger a migration review: rows past the ceiling (leading),
 dashboard p95 over 1s across 7 days, or rollup lag over 30s. An option held,
 not a migration scheduled. It may never fire.
 
@@ -199,7 +201,7 @@ event, 4 requiring memory of others [Observed]. Full output with every
 | Deletion scope | `evt-0017` | Resolved via identity graph; reaches `evt-0006`, written anonymously |
 | Identity stitching | `evt-0003`, `-0008`, `-0017`, `-0022` | History re-attributed retroactively |
 | Client-asserted aggregate | `evt-0019` | Stored with provenance, never source of truth. See section 5 |
-| *all rows* | *25 lines* | *[Observed] - regenerate via `pipeline/run.py`* |
+| *all rows* | *25 lines* | *[Observed], regenerate via `pipeline/run.py`* |
 
 **The 9/4 split is itself an architectural finding.** Those four cannot be
 answered by a stateless consumer at any price. They are the argument for keyed
@@ -213,7 +215,7 @@ All three are reproducible against `results/findings.json`.
 segment. `evt-0019` supplies exactly that: `count_today: 3`. The server's own
 record for that visitor, `anon-9f2`, shows **one** pricing page view
 [Observed]. A counter computed in a browser cannot be audited, cannot be
-recomputed, and is trivially forged. The trap is not spotting bad data - it is
+recomputed, and is trivially forged. The trap is not spotting bad data. It is
 that the brief asks for the feature the bad data would break. Segments are
 recomputed server-side. The claim is still stored, in a separate namespace,
 because the divergence is a free loss measurement.
@@ -226,7 +228,7 @@ with no recovery; wrong and labeled, the cost is one column in a table.
 
 **3. The brief's own loss figure.** It states ~3% loss at peak. This fixture
 can neither confirm nor refute that, and I will not pretend otherwise.
-`event_id` runs `evt-0001` to `evt-0024` with no gaps [Observed] - but a
+`event_id` runs `evt-0001` to `evt-0024` with no gaps [Observed], but a
 curated sample shows no gaps whether or not the system leaks, and we do not
 know whether `event_id` is assigned client-side or on receipt. If the server
 assigns it, loss is invisible by construction. **What would settle it:** a
@@ -258,131 +260,116 @@ python -m pipeline.latency fixtures/event_sample.jsonl
 python -m pipeline.cost
 ```
 
-Outputs land in `results/` and are committed, so the findings are readable
-without running anything: `findings.txt`, `findings.json`, `dead_letter.jsonl`,
-`latency.txt`, `cost_model.txt`.
+Outputs are committed to `results/`, so findings are readable without running
+anything. 50 tests [Observed]: `python -m unittest discover -s tests -t .`
 
 # Artifact access
 
-**https://github.com/henry-hai/beat-claude-engineer-004** - public, verified
-reachable unauthenticated.
+**https://github.com/henry-hai/beat-claude-engineer-004**. Public, verified
+reachable unauthenticated. `git log` is the build history in order.
 
 ```
 git clone https://github.com/henry-hai/beat-claude-engineer-004
-cd beat-claude-engineer-004
-python -m pipeline.run fixtures/event_sample.jsonl
+cd beat-claude-engineer-004 && python -m pipeline.run fixtures/event_sample.jsonl
 ```
 
 The fixture is vendored so the repo runs standalone, and `.gitattributes` pins
-`*.jsonl` with `-text` so Git never rewrites its line endings. Without that
-pin, cloning on Windows converts all 25 line endings to CRLF and changes the
-file from 5,749 to 5,774 bytes - identical text to a human, a completely
-different SHA-256 [Observed]. GitHub currently serves it at 5,749 bytes with
-the hash quoted at the top of this document, so `shasum -a 256` reproduces on
-any platform.
-
-`git log` is the build history in order.
+`*.jsonl` with `-text` so Git never rewrites its line endings. Without it,
+cloning on Windows converts 25 line endings to CRLF and moves the file from
+5,749 to 5,774 bytes: identical text to a human, a completely different
+SHA-256 [Observed]. GitHub serves 5,749 bytes, so `shasum -a 256` reproduces
+the hash at the top of this document on any platform.
 
 # Evidence log
 
-Tiers per SCORING.md. Every row names something inspectable, and every figure
-in it is [Observed] unless the row says otherwise.
+Tiers per SCORING.md. Every figure is [Observed] unless the row says otherwise.
 
 | Claim | Tier | Check it |
 |---|---|---|
-| 13 anomaly classes, 21 findings, every `event_id` cited | 3 | `results/findings.json`; regenerate with `python -m pipeline.run` |
-| Fixture checksum reproduces on any OS | 3 | `shasum -a 256 fixtures/event_sample.jsonl`; `.gitattributes` |
-| Mean event size 229 bytes, median 228, range 200-285 | 3 | `results/cost_model.json`, `inputs.MEAN_EVENT_BYTES` |
-| Batch vs streaming staleness: 481.9s vs 0.164s median | 3 | `results/latency.txt`, method stated in `pipeline/latency.py` |
-| Per-event processing cost 0.017ms mean | 3 | `results/latency.txt` |
-| Record count binds Kinesis sizing, not bandwidth | 3 | `results/cost_model.txt`, SIZING block |
-| Modeled spend $1,809/month, 3.6% of ceiling | 3 | `results/cost_model.txt`; AWS list prices cited per line with retrieval date |
-| Serving-tier tripwire: 100M hot rows vs 250M ceiling | 3 | `results/cost_model.txt`, TRIPWIRE block |
-| Build history and decision record | 3 | `git log`, 14 commits with reasoning in the bodies |
-| Architecture design and rejected alternatives | 2 | this document; repo README |
-| Test suite over the pure classifiers | 2 | `tests/` |
-| **Measured before/after from a comparable production system** | **none** | **I do not have this.** See below. |
-| *(every figure above)* | *3* | *[Observed] - `results/findings.json`, `results/latency.json`, `results/cost_model.json`* |
+| 13 anomaly classes, 21 findings, every `event_id` cited | 3 | `results/findings.json` |
+| Fixture checksum reproduces on any OS | 3 | `shasum -a 256 fixtures/event_sample.jsonl` |
+| Mean event size 229 bytes, median 228, range 200-285 | 3 | `results/cost_model.json` |
+| Batch vs streaming staleness: 481.9s vs 0.164s median | 3 | `results/latency.json`, method in `pipeline/latency.py` |
+| Per-event processing 0.017ms mean | 3 | `results/latency.json` |
+| Record count binds Kinesis sizing, not bandwidth | 3 | `results/cost_model.json` |
+| Modeled spend $1,809/mo, 3.6% of ceiling, AWS prices dated | 3 | `results/cost_model.json` |
+| Serving tripwire: 100M hot rows vs 250M ceiling | 3 | `results/cost_model.json` |
+| Build history and decision record | 3 | `git log`, 16 commits with reasoning |
+| Architecture and rejected alternatives; 50-test suite | 2 | this document; `tests/` |
+| **Measured before/after from a comparable production system** | **none** | **I do not have this** |
+| *every figure above* | *3* | *[Observed] via `results/*.json`* |
 
-**On the missing Tier 4.** The challenge rubric calls Tier 4 the
-differentiator: measured before/after from a comparable system actually built
-or fixed. I have no production analytics pipeline at this scale to cite, so I
-am not claiming it. The closest honest substitute is the latency measurement in
-`pipeline/latency.py`, and it is logged Tier 3 rather than 4 deliberately - it
-is a benchmark run on a simulation I wrote, not a before/after on a real
-system, and it moves 25 events rather than 50 million [Observed]. Calling it
-Tier 4 would be inflation on a rubric built to catch exactly that.
+**On the missing Tier 4.** The rubric calls it the differentiator: measured
+before/after from a comparable system actually built or fixed. I have no
+production pipeline at this scale to cite, so I am not claiming it. The closest
+honest substitute is the latency harness in `pipeline/latency.py`, logged Tier 3
+deliberately, because it is a benchmark run on a simulation I wrote, moving 25
+events rather than 50 million [Observed]. Calling it Tier 4 would be inflation on a rubric
+built to catch exactly that.
 
 # Number source labels
 
-Every number in this document carries one of four labels, in the same
-paragraph:
-
-- **[Observed]** - measured directly, from the fixture or from running the
-  artifact. Reproducible with the commands above.
-- **[Benchmarked]** - a published AWS list price, with the pricing page and
-  retrieval date recorded in `pipeline/cost.py`.
-- **[Estimated]** - derived by stated arithmetic from labeled inputs. The
-  derivation is in the code, not just the conclusion.
-- **[Assumed]** - a placeholder chosen to make the plan concrete. Every
-  threshold in the detector and every sizing assumption in the cost model is
-  [Assumed] and lives as a named constant, so it is easy to find and argue
-  with rather than buried in a function.
+Every number carries one of four labels, in the same paragraph.
+**[Observed]**: measured from the fixture or from running the artifact,
+reproducible with the commands above. **[Benchmarked]**: a published AWS list
+price, with page and retrieval date recorded in `pipeline/cost.py`.
+**[Estimated]**: derived by stated arithmetic from labeled inputs, with the
+derivation in the code rather than just the conclusion. **[Assumed]**: a
+placeholder chosen to make the plan concrete. Every threshold in the detector
+and every sizing assumption in the cost model is [Assumed] and lives as a named
+constant, easy to find and argue with rather than buried in a function.
 
 # AI usage disclosure
 
-**Tools.** Claude Code (Opus 5) in a terminal for the build, and a separate
-Claude browser session as an adversarial reviewer.
+**Tools.** Claude Code (Opus 5) in a terminal for the build; a separate Claude
+browser session as an adversarial reviewer.
 
-**What AI did.** Wrote the pipeline code, the cost model, and the first draft
-of this document from my direction. Pulled AWS list prices from the published
-pricing pages. Caught the line-ending problem that would have made my checksum
-unreproducible.
+**What AI did.** Wrote the pipeline code, the cost model, and a first draft of
+this document from my direction. Pulled AWS list prices from published pages.
+Caught the line-ending problem that would have made my checksum unreproducible.
 
 **What I decided.** That the fixture detector was the primary artifact and the
-broker POC was optional. That the riskiest component is ingest, not transport.
-That prior work of mine stays out of the evidence log, so every claim here is
+broker POC optional. That the riskiest component is ingest, not transport. That
+my own prior work stays out of the evidence log, so every claim here is
 reproducible by a stranger. The voice. What the MVP excludes.
 
-**What I checked or changed.** Every number in this document was regenerated
-from the artifact rather than transcribed. Two AWS components could not be
-priced from the published pages, and rather than let a plausible figure through
-I left them visibly unpriced. I used the second Claude session to attack the
-first: it correctly called out that I had claimed Tier 4 for the latency
-measurement when the rubric's definition does not support it, and it is logged
-Tier 3 as a result. Two model-generated numbers were wrong and caught by
-re-running the arithmetic - the rollup sizing initially used a cross-product
-where the real bound is traffic, which would have selected the wrong serving
-tier.
+**What I checked or changed.** Every number was regenerated from the artifact,
+not transcribed. Two AWS components could not be priced from the published
+pages; rather than let a plausible figure through, I left them visibly
+unpriced. I used the second session to attack the first, and it correctly
+called out that I had claimed Tier 4 for the latency measurement when the
+rubric does not support it, hence Tier 3. Two model-generated numbers were
+wrong and caught by re-running the arithmetic; the rollup sizing used a
+cross-product where the real bound is traffic, which would have selected the
+wrong serving tier.
 
-**Known weak spots.** The prose is fluent, and fluency is not evidence - judge
+**Known weak spots.** The prose is fluent, and fluency is not evidence. Judge
 the repo, not the writing. Every threshold is [Assumed] rather than tuned
 against real data; they are named constants in `pipeline/rules.py` and
-`pipeline/state.py` so they are easy to find and argue with. I have not
-operated Kafka or Flink in production; this architecture is reasoned from first
-principles and from the failure modes visible in the fixture, not from having
-run one at 50M events/day.
+`pipeline/state.py`, easy to find and argue with. I have not operated Kafka or
+Flink in production; this is reasoned from first principles and from the
+failure modes visible in the fixture, not from having run one at 50M
+events/day.
 
 # What breaks it
 
-**The sample is 25 events** [Observed]. It cannot establish any rate - not an
-error rate, not a loss rate, not a distribution. Every conclusion drawn from it
-is about mechanism, not magnitude.
+**The sample is 25 events** [Observed]. It cannot establish any rate: not
+error, not loss, not a distribution. Every conclusion from it is about
+mechanism, not magnitude.
 
-**Every threshold is assumed.** Clock-skew tolerances, the dedupe window, the
-burst threshold, the Postgres row ceiling. If real clock skew across the SDK
-fleet is distributed differently than guessed, the ladder mislabels events.
-These are starting policy, not tuned values.
+**Every threshold is assumed**: clock-skew tolerances, the dedupe window, the
+burst threshold, the Postgres row ceiling. If real skew across the SDK fleet is
+distributed differently than guessed, the ladder mislabels events.
 
-**The bot heuristic has false positives** by construction. A referrer is
-attacker-controlled and a legitimate company could be called anything. This is
+**The bot heuristic has false positives** by construction: a referrer is
+attacker-controlled and a legitimate company could be called anything. Which is
 why the pipeline labels rather than deletes.
 
-**Deletion scope from the artifact is a lower bound, not the truth.** Keyed
-state is bounded, so the in-memory graph knows only what it has recently seen.
-Real deletion must run against durable storage.
+**Deletion scope from the artifact is a lower bound.** Keyed state is bounded,
+so the in-memory graph knows only what it has recently seen. Real deletion runs
+against durable storage.
 
-**Two cost lines are unpriced** - a managed OLAP tier and Aurora - because AWS
+**Two cost lines are unpriced**, a managed OLAP tier and Aurora, because AWS
 did not render their rate tables when checked. With 96% of the ceiling unused
 [Estimated] they are unlikely to change the conclusion, but that is a
 prediction, not a calculation.
@@ -393,40 +380,35 @@ the Postgres rollup table is wrong from day one and the tripwire fires
 immediately rather than never.
 
 **The latency harness is a simulation.** It has no network, no cluster, no
-queue. It isolates and measures the mechanism - that batch-window size
-dominates end-to-end latency - and proves nothing about any broker. Method and
+queue. It isolates and measures one mechanism: batch-window size
+dominates end-to-end latency. It proves nothing about any broker. Method and
 exclusions are stated in `pipeline/latency.py`.
 
 # What stays human
 
-Everything below is either irreversible or legally binding. The detector was
-deliberately built to label rather than act, precisely so these stay decisions.
+Everything below is irreversible or legally binding. The detector labels rather
+than acts, precisely so these stay decisions.
 
-**Deleting suspected bot traffic.** Automated flagging, human deletion. If the
-heuristic is wrong and the events are gone, there is no recovery; if it is
-wrong and they are only labeled, the cost is one column in a table. Asymmetric
-risk means the automation stops at the flag.
+**Deleting suspected bot traffic.** Automated flagging, human deletion. Wrong
+and deleted, there is no recovery; wrong and labeled, the cost is one column.
+Asymmetric risk means the automation stops at the flag.
 
 **The scope of a GDPR deletion.** The pipeline can compute which anonymous
-history belongs to an identified user. It should not execute the deletion
-unreviewed, because both errors are unacceptable in different directions:
-deleting too little is a regulatory failure, deleting too much destroys another
-person's data.
+history belongs to an identified user; it should not execute unreviewed. Both
+errors are unacceptable in different directions. Too little is a regulatory
+failure; too much destroys another person's data.
 
-**Overriding a rollback.** The rollback itself is automatic and needs no human
-- that is the point. But the decision to push a tenant forward again after one
-fires is a judgment about whether the underlying cause is understood.
+**Overriding a rollback.** The rollback is automatic and needs no human; that
+is the point. Pushing a tenant forward again after one fires is a judgment
+about whether the cause is understood.
 
 **Attributing a null-tenant event.** `evt-0011` has no tenant [Observed].
-Guessing which of 500+ customers it belongs to is a data breach if wrong, so
-the pipeline quarantines and a human resolves it against the source
-integration.
+Guessing which of 500+ customers owns it is a data breach if wrong, so the
+pipeline quarantines and a human resolves it against the source integration.
 
-**Declaring accuracy verified at cutover.** The parallel-run comparison
-produces a number. Deciding that the number is good enough to move a paying
-customer onto a new pipeline is not a threshold check; it is accountability,
-and it needs a name attached to it.
+**Declaring accuracy verified at cutover.** The parallel run produces a number.
+Deciding it is good enough to move a paying customer is not a threshold check;
+it is accountability, and it needs a name attached.
 
-**Tuning any threshold in this system.** Every one is [Assumed]. Changing them
-changes what the pipeline considers real, and that should never be an
-autoscaling decision.
+**Tuning any threshold here.** Every one is [Assumed]. Changing them changes
+what the pipeline considers real, and that is never an autoscaling decision.
