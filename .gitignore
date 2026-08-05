@@ -14,6 +14,8 @@ Thumbs.db
 .DS_Store
 
 # Generated submission binaries (the .md is the source of truth)
-submission/*.pdf
 # Layout scratch preview, not a deliverable
 submission/preview.html
+# Working PDFs; the final submission PDF is committed by name
+submission/Layout preview*.pdf
+submission/Real-Time Analytics Pipeline*.pdf
